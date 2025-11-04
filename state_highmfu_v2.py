@@ -259,7 +259,7 @@ else:
         print(f"📦 Unzipping to {LOCAL_DATA_DIR}...")
         
         with ZipFile(zip_path, 'r') as z:
-            z.extractall(BASE_DIR)
+            z.extractall(LOCAL_DATA_DIR)
         
         print(f"✅ Data ready at {LOCAL_DATA_DIR}")
 

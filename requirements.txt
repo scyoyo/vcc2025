@@ -1,6 +1,9 @@
 # Core dependencies (minimal)
 torch>=2.0.0
 
+# Data handling
+h5py>=3.8.0
+
 # Progress bars (for data download)
 tqdm>=4.64.0
 

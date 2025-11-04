@@ -353,7 +353,7 @@ except ImportError:
         if result.returncode != 0:
             print(f"⚠️  Installation warning: {result.stderr}")
         else:
-    print("✅ Installation complete!")
+            print("✅ Installation complete!")
     else:
         print("⚠️  setup.py not found. Please install STATE manually:")
         print("   pip install -e /path/to/state")

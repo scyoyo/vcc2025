@@ -675,8 +675,8 @@ if num_gpus > 1:
     print(f"🎯 预期MFU: 10-15% (多GPU加速)")
     print(f"🎯 预期时间: 1-2小时 (vs 2-3小时单GPU)")
 else:
-print(f"🎯 预期MFU: 8-12% (vs 1.5% baseline)")
-print(f"🎯 预期时间: 2-2.5小时 (vs 3-4小时)")
+    print(f"🎯 预期MFU: 8-12% (vs 1.5% baseline)")
+    print(f"🎯 预期时间: 2-2.5小时 (vs 3-4小时)")
 print("="*80)
 
 print("\n🚀 Starting HIGH MFU training...\n")
@@ -759,8 +759,8 @@ If you want even faster training for testing, uncomment and run the cell below i
 #   training.max_steps=20000 \
 #   training.ckpt_every_n_steps=10000 \
 #   model={model_size} \
-  ++training.precision=16-mixed \\
-  ++training.log_every_n_steps=100 \\
+#   ++training.precision=16-mixed \
+#   ++training.log_every_n_steps=100 \
 #   wandb.tags="[quick_run]" \
 #   wandb.project=vcc \
 #   wandb.entity=arcinstitute \

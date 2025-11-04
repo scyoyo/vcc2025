@@ -382,6 +382,38 @@ except ImportError:
 
 print("=" * 70)
 
+# Detect state command - use python -m state if 'state' command not found
+STATE_CMD = None
+for cmd in ['state', 'python -m state', 'python3 -m state']:
+    try:
+        if ' ' in cmd:
+            # For 'python -m state', use list format
+            test_cmd = cmd.split() + ['--help']
+        else:
+            test_cmd = [cmd, '--help']
+        result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            if ' ' in cmd:
+                STATE_CMD = cmd.split()
+            else:
+                STATE_CMD = [cmd]
+            print(f"✅ Using state command: {' '.join(STATE_CMD)}")
+            break
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        continue
+
+if STATE_CMD is None:
+    # Fallback: try to find state executable via Python
+    try:
+        import state
+        import sys
+        # Try to use python -m state
+        STATE_CMD = [sys.executable, '-m', 'state']
+        print(f"✅ Using state command: {' '.join(STATE_CMD)}")
+    except ImportError:
+        STATE_CMD = ['state']  # Will fail with clear error
+        print("⚠️  Could not find state command, will try 'state' (may fail)")
+
 # Enable lazy checkpoint loading (for faster model loading)
 import torch
 
@@ -627,8 +659,8 @@ if num_gpus > 1:
 else:
     gradient_accumulation_steps = 8
 
-train_cmd_parts = [
-    'state', 'tx', 'train',
+train_cmd_parts = STATE_CMD + [
+    'tx', 'train',
     f'data.kwargs.toml_config_path={config_toml}',
     f'data.kwargs.num_workers={num_workers}',
     'data.kwargs.batch_col=batch_var',
@@ -816,8 +848,8 @@ else:
 # Run inference with the final checkpoint (step=40000)
 # Change the checkpoint step if using a different one
 
-infer_cmd = [
-    'state', 'tx', 'infer',
+infer_cmd = STATE_CMD + [
+    'tx', 'infer',
     '--output', f'{OUTPUT_DIR}/prediction.h5ad',
     '--model-dir', f'{OUTPUT_DIR}/{RUN_NAME}',
     '--checkpoint', f'{OUTPUT_DIR}/{RUN_NAME}/checkpoints/step=40000.ckpt',
@@ -833,8 +865,8 @@ If step=40000.ckpt doesn't exist, you can use an earlier checkpoint:
 """
 
 # # Alternative: Use step=30000 or step=20000 checkpoint
-# infer_cmd = [
-#     'state', 'tx', 'infer',
+# infer_cmd = STATE_CMD + [
+#     'tx', 'infer',
 #     '--output', f'{OUTPUT_DIR}/prediction_30k.h5ad',
 #     '--model-dir', f'{OUTPUT_DIR}/{RUN_NAME}',
 #     '--checkpoint', f'{OUTPUT_DIR}/{RUN_NAME}/checkpoints/step=30000.ckpt',

@@ -116,6 +116,12 @@ pip install "transformers>=4.30.0,<4.42.0"
 pip install transformers==4.41.2
 ```
 
+**多GPU DDP错误 (`RuntimeError: It looks like your LightningModule has parameters that were not used`)**:
+```bash
+# 代码已自动处理，使用 ddp_find_unused_parameters_true 策略
+# 如果仍有问题，检查代码中的 strategy 配置
+```
+
 ## 📚 相关资源
 
 - [STATE Paper](https://www.biorxiv.org/content/10.1101/2025.06.26.661135)

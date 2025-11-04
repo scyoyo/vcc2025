@@ -601,7 +601,11 @@ for dr in date_runs:
 
 if existing_runs:
     print(f"\n📁 Found {len(existing_runs)} existing run(s):")
-    for i, run in enumerate(existing_runs[-5:], 1):  # Show last 5
+    # Show last 5 runs (most recent)
+    displayed_runs = existing_runs[-5:]
+    run_map = {}  # Map number to run name
+    
+    for i, run in enumerate(displayed_runs, 1):
         run_dir = f'competition_{run}'
         # Check for checkpoints
         ckpts = glob.glob(f'{run_dir}/{run}/checkpoints/*.ckpt')
@@ -611,19 +615,21 @@ if existing_runs:
             print(f"  {i}. {run} (latest: {ckpt_name})")
         else:
             print(f"  {i}. {run} (no checkpoints yet)")
+        run_map[str(i)] = run
 
     print("\n❓ Options:")
-    print("  1. Resume existing run (enter run name, e.g., 'run1')")
-    print("  2. Start new run (press Enter for auto-generated name)")
+    print("  • Enter number (1-{}) to resume existing run".format(len(displayed_runs)))
+    print("  • Enter 0 or press Enter to start new run")
 
-    choice = input("\nYour choice (run name or Enter for new): ").strip()
+    choice = input("\nYour choice (number, 0, or Enter for new): ").strip()
 
-    if choice and choice in existing_runs:
-        RUN_NAME = choice
+    if choice and choice != '0' and choice in run_map:
+        # User selected a number - resume that run
+        RUN_NAME = run_map[choice]
         RESUME_TRAINING = True
         print(f"\n✅ Resuming: {RUN_NAME}")
     else:
-        # Generate new run name with date
+        # User entered 0, Enter, or invalid input - start new run
         RUN_NAME = datetime.now().strftime('run_%Y%m%d_%H%M')
         RESUME_TRAINING = False
         print(f"\n✅ Starting new run: {RUN_NAME}")
@@ -792,8 +798,9 @@ if wandb_entity:
 if num_gpus > 1:
     train_cmd_parts.append('++training.accelerator=gpu')
     train_cmd_parts.append(f'++training.devices={num_gpus}')
-    train_cmd_parts.append('++training.strategy=ddp')
-    print(f"✅ Multi-GPU training enabled: {num_gpus} GPUs with DDP strategy")
+    # Use ddp_find_unused_parameters_true to handle unused parameters in STATE model
+    train_cmd_parts.append('++training.strategy=ddp_find_unused_parameters_true')
+    print(f"✅ Multi-GPU training enabled: {num_gpus} GPUs with DDP strategy (find_unused_parameters=True)")
 elif num_gpus == 1:
     train_cmd_parts.append('++training.accelerator=gpu')
     train_cmd_parts.append('++training.devices=1')

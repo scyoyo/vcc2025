@@ -382,37 +382,106 @@ except ImportError:
 
 print("=" * 70)
 
-# Detect state command - use python -m state if 'state' command not found
+# Detect state command - try multiple methods
 STATE_CMD = None
-for cmd in ['state', 'python -m state', 'python3 -m state']:
+import sys
+
+# Method 1: Try direct 'state' command
+try:
+    result = subprocess.run(['state', '--help'], capture_output=True, text=True, timeout=5)
+    if result.returncode == 0:
+        STATE_CMD = ['state']
+        print(f"✅ Using state command: state")
+except (FileNotFoundError, subprocess.TimeoutExpired):
+    pass
+
+# Method 2: Try to find via which command
+if STATE_CMD is None:
     try:
-        if ' ' in cmd:
-            # For 'python -m state', use list format
-            test_cmd = cmd.split() + ['--help']
-        else:
-            test_cmd = [cmd, '--help']
-        result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            if ' ' in cmd:
-                STATE_CMD = cmd.split()
-            else:
-                STATE_CMD = [cmd]
+        result = subprocess.run(['which', 'state'], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            state_path = result.stdout.strip()
+            STATE_CMD = [state_path]
+            print(f"✅ Using state command: {state_path}")
+    except FileNotFoundError:
+        pass
+
+# Method 3: Try to find entry point script in Python bin directory
+if STATE_CMD is None:
+    try:
+        # Get Python executable directory
+        python_bin = os.path.dirname(sys.executable)
+        # Check common locations for entry point scripts
+        possible_paths = [
+            os.path.join(python_bin, 'state'),
+            os.path.join(os.path.dirname(python_bin), 'bin', 'state'),
+            os.path.join(os.path.dirname(python_bin), 'local', 'bin', 'state'),
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                STATE_CMD = [path]
+                print(f"✅ Using state command: {path}")
+                break
+    except:
+        pass
+
+# Method 4: Try to find state script in STATE_REPO_DIR
+if STATE_CMD is None and os.path.exists(STATE_REPO_DIR):
+    # Check for common CLI script locations
+    state_scripts = [
+        os.path.join(STATE_REPO_DIR, 'scripts', 'state'),
+        os.path.join(STATE_REPO_DIR, 'src', 'state', '__main__.py'),
+        os.path.join(STATE_REPO_DIR, 'src', 'state', 'cli', '__main__.py'),
+    ]
+    for script_path in state_scripts:
+        if os.path.exists(script_path):
+            STATE_CMD = [sys.executable, script_path]
             print(f"✅ Using state command: {' '.join(STATE_CMD)}")
             break
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        continue
 
+# Method 5: Try using entry_points from installed package to find script location
 if STATE_CMD is None:
-    # Fallback: try to find state executable via Python
+    try:
+        import site
+        # Check site-packages bin directories
+        for site_dir in site.getsitepackages():
+            bin_dir = os.path.join(os.path.dirname(site_dir), 'bin')
+            state_bin = os.path.join(bin_dir, 'state')
+            if os.path.exists(state_bin):
+                STATE_CMD = [state_bin]
+                print(f"✅ Using state command: {state_bin}")
+                break
+    except:
+        pass
+
+# Method 6: Final fallback - try to use state CLI module directly
+if STATE_CMD is None:
     try:
         import state
-        import sys
-        # Try to use python -m state
-        STATE_CMD = [sys.executable, '-m', 'state']
-        print(f"✅ Using state command: {' '.join(STATE_CMD)}")
+        # Try common CLI entry points
+        if hasattr(state, '__main__'):
+            STATE_CMD = [sys.executable, '-m', 'state']
+            print(f"✅ Using state command: {' '.join(STATE_CMD)}")
+        else:
+            # Try to find __main__.py in state package
+            import importlib.util
+            spec = importlib.util.find_spec("state")
+            if spec and spec.submodule_search_locations:
+                main_py = os.path.join(spec.submodule_search_locations[0], '__main__.py')
+                if os.path.exists(main_py):
+                    STATE_CMD = [sys.executable, '-m', 'state']
+                    print(f"✅ Using state command: {' '.join(STATE_CMD)}")
     except ImportError:
-        STATE_CMD = ['state']  # Will fail with clear error
-        print("⚠️  Could not find state command, will try 'state' (may fail)")
+        pass
+
+# If still not found, use 'state' and provide helpful error message
+if STATE_CMD is None:
+    STATE_CMD = ['state']
+    print("⚠️  Could not find state command automatically")
+    print("   Please ensure STATE is properly installed:")
+    print(f"     1. cd {STATE_REPO_DIR}")
+    print("     2. pip install -e .")
+    print("   Or manually set STATE command path if installed elsewhere")
 
 # Enable lazy checkpoint loading (for faster model loading)
 import torch
@@ -891,13 +960,28 @@ except:
     print("   Or skip this step if cell-eval doesn't require it")
 
 # Prepare submission file using cell-eval
-cell_eval_cmd = [
-    'uv', 'tool', 'run', '--from', 'git+https://github.com/ArcInstitute/cell-eval@main',
-    'cell-eval', 'prep',
-    '-i', f'{OUTPUT_DIR}/prediction.h5ad',
-    '-g', f'{LOCAL_DATA_DIR}/gene_names.csv'
-]
-subprocess.run(cell_eval_cmd, check=False)
+# Check if uv is available
+uv_available = False
+try:
+    result = subprocess.run(['which', 'uv'], capture_output=True, text=True)
+    if result.returncode == 0:
+        uv_available = True
+except:
+    pass
+
+if uv_available:
+    cell_eval_cmd = [
+        'uv', 'tool', 'run', '--from', 'git+https://github.com/ArcInstitute/cell-eval@main',
+        'cell-eval', 'prep',
+        '-i', f'{OUTPUT_DIR}/prediction.h5ad',
+        '-g', f'{LOCAL_DATA_DIR}/gene_names.csv'
+    ]
+    subprocess.run(cell_eval_cmd, check=False)
+else:
+    print("⚠️  'uv' command not found. Cannot run cell-eval prep automatically.")
+    print("   Please install uv first:")
+    print("     curl -LsSf https://astral.sh/uv/install.sh | sh")
+    print("   Or manually prepare submission file using cell-eval")
 
 # Find and display submission file
 import glob

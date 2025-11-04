@@ -102,7 +102,7 @@ import os
 os.environ.setdefault('MPLBACKEND', 'Agg')
 
 # Enable faster training with optimizations
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
+os.environ['PYTORCH_ALLOC_CONF'] = 'max_split_size_mb:128'
 os.environ['OMP_NUM_THREADS'] = '8'
 
 """## 2. Check GPU and Configure Settings
@@ -342,8 +342,14 @@ print("=" * 70)
 try:
     import state
     print("✅ STATE already installed!")
-    result = subprocess.run(['state', '--help'], capture_output=True, text=True)
-    print('\n'.join(result.stdout.split('\n')[:10]))
+    # Try to show help, but don't fail if command not found
+    try:
+        result = subprocess.run(['state', '--help'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            print('\n'.join(result.stdout.split('\n')[:10]))
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        print("⚠️  STATE Python package installed, but 'state' command not found in PATH")
+        print("   This is usually fine - training should still work")
 except ImportError:
     print("📦 Installing STATE package...")
     print("⏳ Takes ~1 minute...")
@@ -360,12 +366,14 @@ except ImportError:
         print("⚠️  setup.py not found. Please install STATE manually:")
         print("   pip install -e /path/to/state")
     
-    # Try to show help
+    # Try to show help, but don't fail if command not found
     try:
-        result = subprocess.run(['state', '--help'], capture_output=True, text=True)
-        print('\n'.join(result.stdout.split('\n')[:10]))
-    except:
-        pass
+        result = subprocess.run(['state', '--help'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            print('\n'.join(result.stdout.split('\n')[:10]))
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        print("⚠️  'state' command not found in PATH, but Python package may be installed")
+        print("   Training should still work if STATE is installed via pip")
 
 print("=" * 70)
 
@@ -428,7 +436,7 @@ import gc
 gc.collect()
 
 # Set PyTorch to use less system memory
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512,expandable_segments:True'
+os.environ['PYTORCH_ALLOC_CONF'] = 'max_split_size_mb:512,expandable_segments:True'
 
 # Reduce dataloader prefetch to save memory
 os.environ['PREFETCH_FACTOR'] = '2'

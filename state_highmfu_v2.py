@@ -20,13 +20,20 @@ Server-optimized version (adapted from Colab notebook)
 
 ### 🔧 环境配置
 
-在运行前，可以设置环境变量自定义路径：
+在运行前，可以设置环境变量自定义路径和GPU数量：
 ```bash
 export VCC_DATA_DIR=/path/to/your/data/directory  # 数据目录（可选）
 export STATE_REPO_DIR=/path/to/state/repo         # STATE仓库路径（可选）
+export NUM_GPUS=4                                 # 使用GPU数量（可选，默认使用所有GPU）
 ```
 
-如果不设置，将使用当前工作目录。
+如果不设置，将使用当前工作目录和所有可用GPU。
+
+**设置GPU数量示例：**
+- `export NUM_GPUS=1` - 只使用1个GPU
+- `export NUM_GPUS=4` - 使用4个GPU
+- `export NUM_GPUS=9` - 使用9个GPU（如果服务器有9个GPU）
+- 不设置 - 自动使用所有可用GPU
 
 ### ❌ 不要跳过代码块！
 
@@ -109,20 +116,43 @@ print("GPU DETECTION & CONFIGURATION")
 print("=" * 70)
 
 if torch.cuda.is_available():
-    num_gpus = torch.cuda.device_count()
+    total_gpus = torch.cuda.device_count()
     gpu_name = torch.cuda.get_device_name(0)
     gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
     
-    print(f"✅ Found {num_gpus} GPU(s)")
+    print(f"✅ Found {total_gpus} GPU(s) available")
     print(f"✅ GPU 0: {gpu_name}")
     print(f"💾 GPU Memory: {gpu_memory:.2f} GB per GPU")
     
     # List all GPUs
-    if num_gpus > 1:
+    if total_gpus > 1:
         print(f"\n📋 All GPUs:")
-        for i in range(num_gpus):
+        for i in range(total_gpus):
             gpu_info = torch.cuda.get_device_properties(i)
             print(f"  GPU {i}: {gpu_info.name} ({gpu_info.total_memory / 1024**3:.2f} GB)")
+    
+    # Configure number of GPUs to use
+    # Option 1: Environment variable NUM_GPUS
+    # Option 2: Set use_num_gpus in code (uncomment and modify below)
+    use_num_gpus = os.environ.get('NUM_GPUS')
+    if use_num_gpus:
+        try:
+            use_num_gpus = int(use_num_gpus)
+            use_num_gpus = min(use_num_gpus, total_gpus)  # Don't exceed available GPUs
+            print(f"\n⚙️  Using {use_num_gpus} GPU(s) (set via NUM_GPUS environment variable)")
+        except ValueError:
+            print(f"⚠️  Invalid NUM_GPUS value, using all {total_gpus} GPUs")
+            use_num_gpus = total_gpus
+    else:
+        # Option 2: Uncomment and modify the line below to set GPU count manually
+        # use_num_gpus = 4  # Example: use 4 GPUs instead of all
+        use_num_gpus = total_gpus  # Default: use all available GPUs
+        if use_num_gpus < total_gpus:
+            print(f"\n⚙️  Using {use_num_gpus} GPU(s) (configured in code)")
+        else:
+            print(f"\n⚙️  Using all {use_num_gpus} GPU(s) (default)")
+    
+    num_gpus = use_num_gpus
 
     # Optimize: High GPU, Low System RAM
     # RTX 5090 has 32GB, treat similar to A100 but with RTX optimizations
@@ -146,16 +176,23 @@ if torch.cuda.is_available():
         print("✨ Standard GPU: balanced")
 
     print(f"\n📊 Configuration:")
-    print(f"  • Number of GPUs: {num_gpus}")
+    print(f"  • Available GPUs: {total_gpus}")
+    print(f"  • GPUs to use: {num_gpus}")
     print(f"  • num_workers: {num_workers}")
     print(f"  • cell_set_length: {cell_set_length}")
     print(f"  • model: {model_size}")
     
     if num_gpus > 1:
         print(f"\n🚀 Multi-GPU Training:")
-        print(f"  • PyTorch Lightning will automatically use all {num_gpus} GPUs")
-        print(f"  • Use DDP (Distributed Data Parallel) strategy")
+        print(f"  • Will use {num_gpus} GPU(s) with DDP (Distributed Data Parallel)")
         print(f"  • Effective batch size will be multiplied by {num_gpus}")
+        if num_gpus < total_gpus:
+            print(f"  • Note: {total_gpus - num_gpus} GPU(s) will not be used")
+    elif num_gpus == 1:
+        print(f"\n💻 Single GPU Training:")
+        if total_gpus > 1:
+            print(f"  • Note: {total_gpus - 1} other GPU(s) available but not used")
+            print(f"  • To use more GPUs, set: export NUM_GPUS=<number>")
 else:
     print("❌ No GPU detected")
     num_workers = 2
@@ -195,15 +232,15 @@ else:
         print("📥 Downloading competition_support_set.zip...")
         url = "https://storage.googleapis.com/vcc_data_prod/datasets/state/competition_support_set.zip"
         try:
-            response = requests.get(url, stream=True)
+        response = requests.get(url, stream=True)
             response.raise_for_status()
-            total = int(response.headers.get("content-length", 0))
+        total = int(response.headers.get("content-length", 0))
 
-            with open(zip_path, "wb") as f, tqdm(total=total, unit='B', unit_scale=True) as bar:
-                for chunk in response.iter_content(8192):
-                    if chunk:
-                        f.write(chunk)
-                        bar.update(len(chunk))
+        with open(zip_path, "wb") as f, tqdm(total=total, unit='B', unit_scale=True) as bar:
+            for chunk in response.iter_content(8192):
+                if chunk:
+                    f.write(chunk)
+                    bar.update(len(chunk))
             print(f"✅ Downloaded to {zip_path}")
         except Exception as e:
             print(f"❌ Download failed: {e}")
@@ -212,13 +249,13 @@ else:
 
     # Unzip if needed
     if os.path.exists(zip_path):
-        os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
-        print(f"📦 Unzipping to {LOCAL_DATA_DIR}...")
-        
-        with ZipFile(zip_path, 'r') as z:
+    os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
+    print(f"📦 Unzipping to {LOCAL_DATA_DIR}...")
+
+    with ZipFile(zip_path, 'r') as z:
             z.extractall(BASE_DIR)
-        
-        print(f"✅ Data ready at {LOCAL_DATA_DIR}")
+
+    print(f"✅ Data ready at {LOCAL_DATA_DIR}")
 
 # Set path for training
 data_path = LOCAL_DATA_DIR
@@ -316,7 +353,7 @@ except ImportError:
         if result.returncode != 0:
             print(f"⚠️  Installation warning: {result.stderr}")
         else:
-            print("✅ Installation complete!")
+    print("✅ Installation complete!")
     else:
         print("⚠️  setup.py not found. Please install STATE manually:")
         print("   pip install -e /path/to/state")
@@ -609,6 +646,10 @@ if num_gpus > 1:
     train_cmd_parts.append(f'++training.devices={num_gpus}')
     train_cmd_parts.append('++training.strategy=ddp')
     print(f"✅ Multi-GPU training enabled: {num_gpus} GPUs with DDP strategy")
+elif num_gpus == 1:
+    train_cmd_parts.append('++training.accelerator=gpu')
+    train_cmd_parts.append('++training.devices=1')
+    print(f"✅ Single GPU training enabled")
 
 if RESUME_TRAINING:
     import glob
@@ -634,8 +675,8 @@ if num_gpus > 1:
     print(f"🎯 预期MFU: 10-15% (多GPU加速)")
     print(f"🎯 预期时间: 1-2小时 (vs 2-3小时单GPU)")
 else:
-    print(f"🎯 预期MFU: 8-12% (vs 1.5% baseline)")
-    print(f"🎯 预期时间: 2-2.5小时 (vs 3-4小时)")
+print(f"🎯 预期MFU: 8-12% (vs 1.5% baseline)")
+print(f"🎯 预期时间: 2-2.5小时 (vs 3-4小时)")
 print("="*80)
 
 print("\n🚀 Starting HIGH MFU training...\n")

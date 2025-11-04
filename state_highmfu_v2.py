@@ -274,17 +274,26 @@ if os.path.exists(toml_path):
     with open(toml_path, 'r') as f:
         content = f.read()
 
-    # Fix dataset paths to use absolute path
-    # Replace relative paths with absolute paths
-    content = re.sub(r'(\w+)\.h5(?!ad)', rf'{LOCAL_DATA_DIR}/\\1.h5', content)
-    # Fix any /content/ paths that might exist
-    content = content.replace('/content/competition_support_set/', f'{LOCAL_DATA_DIR}/')
-    content = content.replace('/content/state/competition_support_set/', f'{LOCAL_DATA_DIR}/')
+    # Fix all possible path patterns to use LOCAL_DATA_DIR
+    # Pattern 1: /content/drive/MyDrive/state/competition_support_set/...
+    content = re.sub(r'/content/drive/MyDrive/state/competition_support_set/', f'{LOCAL_DATA_DIR}/', content)
+    # Pattern 2: /content/state/competition_support_set/...
+    content = re.sub(r'/content/state/competition_support_set/', f'{LOCAL_DATA_DIR}/', content)
+    # Pattern 3: /content/competition_support_set/...
+    content = re.sub(r'/content/competition_support_set/', f'{LOCAL_DATA_DIR}/', content)
+    # Pattern 4: Replace dataset path line with correct path
+    # Match lines like: replogle_h1 = "/path/to/{file1,file2}.h5"
+    dataset_pattern = r'replogle_h1\s*=\s*"[^"]*"'
+    if re.search(dataset_pattern, content):
+        # Replace the entire dataset path line
+        new_dataset_line = f'replogle_h1 = "{LOCAL_DATA_DIR}/{{competition_train,k562_gwps,rpe1,jurkat,k562,hepg2}}.h5"'
+        content = re.sub(dataset_pattern, new_dataset_line, content)
 
     with open(toml_path, 'w') as f:
         f.write(content)
 
     print(f"✅ Fixed paths in starter.toml")
+    print(f"   Dataset path: {LOCAL_DATA_DIR}/{{competition_train,k562_gwps,rpe1,jurkat,k562,hepg2}}.h5")
 else:
     print(f"⚠️  starter.toml not found at {toml_path}")
 
@@ -796,6 +805,19 @@ else:
 print("="*80)
 
 print("\n🚀 Starting HIGH MFU training...\n")
+
+# Check for required dependencies before training
+try:
+    import hydra
+    print("✅ Hydra dependency found")
+except ImportError:
+    print("❌ Hydra not found! This is required by STATE framework.")
+    print(f"\n📋 Please ensure STATE is properly installed:")
+    print(f"   1. cd {STATE_REPO_DIR}")
+    print(f"   2. pip install -e .")
+    print(f"\n   This will install hydra-core and all other STATE dependencies.")
+    raise ImportError("Hydra is required but not installed. Please install STATE framework: pip install -e /path/to/state")
+
 print(f"Training command:\n{' '.join(train_cmd_parts)}\n")
 
 # Execute training command

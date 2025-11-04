@@ -714,6 +714,9 @@ print(f"Model Compilation: Enabled")
 print(f"Training Steps: 40,000")
 print(f"Validation Interval: 2,000 steps")
 print(f"Checkpoint Interval: 5,000 steps")
+print(f"💡 Note: Training uses max_steps=40000 (not max_epochs).")
+print(f"   The 'Epoch' number shown is Lightning's virtual epoch (≈step-based estimate).")
+print(f"   Focus on step numbers instead - training will run for 40,000 steps.")
 print(f"\nDatasets:")
 print(f"  • competition_train (VCC H1 cells)")
 print(f"  • Replogle Support Datasets (K562, RPE1, Jurkat, K562 GWPS, HepG2)")
@@ -721,7 +724,21 @@ print(f"\n💡 Expected speedup: 2-4x faster than original!")
 print("=" * 80)
 
 import logging
+# Disable FLOPs callback logging
 logging.getLogger('state.tx.callbacks.cumulative_flops').disabled = True
+# Suppress ModelFLOPSUtilizationCallback print output by patching the print function
+import builtins
+_original_print = builtins.print
+
+def _filtered_print(*args, **kwargs):
+    """Filter out FLOPs messages from print output"""
+    message = ' '.join(str(arg) for arg in args)
+    if 'ModelFLOPSUtilizationCallback' not in message and 'Measured FLOPs per batch' not in message:
+        _original_print(*args, **kwargs)
+
+# Apply the filter
+builtins.print = _filtered_print
+print("✅ FLOPs callback output suppressed")
 
 # HIGH MFU优化训练（AI Team Phase 3-4建议）
 

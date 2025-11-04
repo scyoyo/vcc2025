@@ -232,15 +232,15 @@ else:
         print("📥 Downloading competition_support_set.zip...")
         url = "https://storage.googleapis.com/vcc_data_prod/datasets/state/competition_support_set.zip"
         try:
-        response = requests.get(url, stream=True)
+            response = requests.get(url, stream=True)
             response.raise_for_status()
-        total = int(response.headers.get("content-length", 0))
+            total = int(response.headers.get("content-length", 0))
 
-        with open(zip_path, "wb") as f, tqdm(total=total, unit='B', unit_scale=True) as bar:
-            for chunk in response.iter_content(8192):
-                if chunk:
-                    f.write(chunk)
-                    bar.update(len(chunk))
+            with open(zip_path, "wb") as f, tqdm(total=total, unit='B', unit_scale=True) as bar:
+                for chunk in response.iter_content(8192):
+                    if chunk:
+                        f.write(chunk)
+                        bar.update(len(chunk))
             print(f"✅ Downloaded to {zip_path}")
         except Exception as e:
             print(f"❌ Download failed: {e}")
@@ -249,13 +249,13 @@ else:
 
     # Unzip if needed
     if os.path.exists(zip_path):
-    os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
-    print(f"📦 Unzipping to {LOCAL_DATA_DIR}...")
-
-    with ZipFile(zip_path, 'r') as z:
+        os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
+        print(f"📦 Unzipping to {LOCAL_DATA_DIR}...")
+        
+        with ZipFile(zip_path, 'r') as z:
             z.extractall(BASE_DIR)
-
-    print(f"✅ Data ready at {LOCAL_DATA_DIR}")
+        
+        print(f"✅ Data ready at {LOCAL_DATA_DIR}")
 
 # Set path for training
 data_path = LOCAL_DATA_DIR

@@ -109,22 +109,36 @@ print("GPU DETECTION & CONFIGURATION")
 print("=" * 70)
 
 if torch.cuda.is_available():
+    num_gpus = torch.cuda.device_count()
     gpu_name = torch.cuda.get_device_name(0)
     gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
-    print(f"✅ GPU: {gpu_name}")
-    print(f"💾 GPU Memory: {gpu_memory:.2f} GB")
+    
+    print(f"✅ Found {num_gpus} GPU(s)")
+    print(f"✅ GPU 0: {gpu_name}")
+    print(f"💾 GPU Memory: {gpu_memory:.2f} GB per GPU")
+    
+    # List all GPUs
+    if num_gpus > 1:
+        print(f"\n📋 All GPUs:")
+        for i in range(num_gpus):
+            gpu_info = torch.cuda.get_device_properties(i)
+            print(f"  GPU {i}: {gpu_info.name} ({gpu_info.total_memory / 1024**3:.2f} GB)")
 
     # Optimize: High GPU, Low System RAM
-    if gpu_memory >= 40:  # A100
-        num_workers = 8  # HIGH MFU: 从4提升
+    # RTX 5090 has 32GB, treat similar to A100 but with RTX optimizations
+    if gpu_memory >= 30:  # RTX 5090, A100, etc.
+        num_workers = 12  # HIGH MFU: 更多workers用于RTX 5090
         cell_set_length = 4096
-        model_size = "state_lg"
-        print("✨ A100: Large batch, low RAM")
-    elif gpu_memory >= 20:  # L4/T4
+        model_size = "state_lg"  # Use large model for high-end GPUs
+        if "RTX 5090" in gpu_name or "5090" in gpu_name:
+            print("✨ RTX 5090: High-end GPU with 32GB - Optimal configuration")
+        else:
+            print("✨ High-end GPU (30GB+): Large batch, low RAM")
+    elif gpu_memory >= 20:  # L4/T4, RTX 3090, etc.
         num_workers = 8  # HIGH MFU: 从4提升
         cell_set_length = 4096
         model_size = "state_sm"
-        print("✨ L4/T4: Medium-large batch, low RAM")
+        print("✨ Mid-range GPU (20-30GB): Medium-large batch, low RAM")
     else:
         num_workers = 4
         cell_set_length = 2048
@@ -132,13 +146,21 @@ if torch.cuda.is_available():
         print("✨ Standard GPU: balanced")
 
     print(f"\n📊 Configuration:")
+    print(f"  • Number of GPUs: {num_gpus}")
     print(f"  • num_workers: {num_workers}")
     print(f"  • cell_set_length: {cell_set_length}")
     print(f"  • model: {model_size}")
+    
+    if num_gpus > 1:
+        print(f"\n🚀 Multi-GPU Training:")
+        print(f"  • PyTorch Lightning will automatically use all {num_gpus} GPUs")
+        print(f"  • Use DDP (Distributed Data Parallel) strategy")
+        print(f"  • Effective batch size will be multiplied by {num_gpus}")
 else:
     print("❌ No GPU detected")
     num_workers = 2
     model_size = "state_sm"
+    num_gpus = 0
 
 print("=" * 70)
 
@@ -504,9 +526,11 @@ print("💡 Training output will be cleaner now")
 print("=" * 80)
 print("OPTIMIZATION SUMMARY")
 print("=" * 80)
-print(f"GPU: {gpu_name if torch.cuda.is_available() else 'CPU'}")
 if torch.cuda.is_available():
-    print(f"GPU Memory: {gpu_memory:.2f} GB")
+    print(f"GPU: {gpu_name} x {num_gpus}")
+    print(f"GPU Memory: {gpu_memory:.2f} GB per GPU")
+else:
+    print(f"GPU: CPU")
 print(f"Data Workers: {num_workers}")
 print(f"Mixed Precision: FP16 enabled")
 print(f"Model Compilation: Enabled")
@@ -534,6 +558,23 @@ print("✅ WandB online mode - 实时监控训练进度")
 # 2. HIGH MFU训练命令
 # Build command as list to handle paths with spaces correctly
 pert_features_file = os.path.join(LOCAL_DATA_DIR, 'ESM2_pert_features.pt')
+
+# Adjust gradient accumulation based on number of GPUs
+# With multiple GPUs, we can reduce gradient accumulation since effective batch is larger
+if num_gpus > 1:
+    # For multi-GPU, reduce gradient accumulation proportionally
+    # Base: 8x for single GPU, reduce to 4x for 2-4 GPUs, 2x for 5+ GPUs
+    if num_gpus >= 5:
+        gradient_accumulation_steps = 2
+    elif num_gpus >= 2:
+        gradient_accumulation_steps = 4
+    else:
+        gradient_accumulation_steps = 8
+    print(f"💡 Multi-GPU detected: Reducing gradient accumulation to {gradient_accumulation_steps}x")
+    print(f"   (Effective batch size: {num_gpus} GPUs × {gradient_accumulation_steps} = {num_gpus * gradient_accumulation_steps}x)")
+else:
+    gradient_accumulation_steps = 8
+
 train_cmd_parts = [
     'state', 'tx', 'train',
     f'data.kwargs.toml_config_path={config_toml}',
@@ -550,7 +591,7 @@ train_cmd_parts = [
     'training.ckpt_every_n_steps=5000',
     '++training.val_check_interval=2000',
     '++training.limit_val_batches=1.0',
-    '++training.gradient_accumulation_steps=8',
+    f'++training.gradient_accumulation_steps={gradient_accumulation_steps}',
     f'model={model_size}',
     '++training.precision=16-mixed',
     '++training.log_every_n_steps=50',
@@ -561,6 +602,13 @@ train_cmd_parts = [
     f'output_dir={OUTPUT_DIR}',
     f'name={RUN_NAME}'
 ]
+
+# Add multi-GPU strategy if multiple GPUs available
+if num_gpus > 1:
+    train_cmd_parts.append('++training.accelerator=gpu')
+    train_cmd_parts.append(f'++training.devices={num_gpus}')
+    train_cmd_parts.append('++training.strategy=ddp')
+    print(f"✅ Multi-GPU training enabled: {num_gpus} GPUs with DDP strategy")
 
 if RESUME_TRAINING:
     import glob
@@ -575,13 +623,19 @@ print("🚀 HIGH MFU TRAINING CONFIGURATION")
 print("="*80)
 print(f"✅ HDF5 Cache: 256MB (vs 1MB baseline)")
 print(f"✅ Workers: {num_workers} + persistent + prefetch=4")
-print(f"✅ Grad Accumulation: 8x (有效batch x8)")
+print(f"✅ Grad Accumulation: {gradient_accumulation_steps}x (有效batch x{gradient_accumulation_steps})")
+if num_gpus > 1:
+    print(f"✅ Multi-GPU: {num_gpus} GPUs (总有效batch x{num_gpus * gradient_accumulation_steps})")
 print(f"✅ Validation: 每2000步 (更频繁监控)")
 print(f"✅ Checkpoint: 每5000步 (vs 10000步)")
 print(f"✅ WandB: 在线模式 (实时监控)")
 print(f"")
-print(f"🎯 预期MFU: 8-12% (vs 1.5% baseline)")
-print(f"🎯 预期时间: 2-2.5小时 (vs 3-4小时)")
+if num_gpus > 1:
+    print(f"🎯 预期MFU: 10-15% (多GPU加速)")
+    print(f"🎯 预期时间: 1-2小时 (vs 2-3小时单GPU)")
+else:
+    print(f"🎯 预期MFU: 8-12% (vs 1.5% baseline)")
+    print(f"🎯 预期时间: 2-2.5小时 (vs 3-4小时)")
 print("="*80)
 
 print("\n🚀 Starting HIGH MFU training...\n")

@@ -434,18 +434,27 @@ if STATE_CMD is None:
     except:
         pass
 
-# Method 4: Try to find state script in STATE_REPO_DIR
+# Method 4: Try python -m state (this is the correct way to run STATE CLI)
+if STATE_CMD is None:
+    try:
+        result = subprocess.run([sys.executable, '-m', 'state', '--help'], 
+                               capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            STATE_CMD = [sys.executable, '-m', 'state']
+            print(f"✅ Using state command: {' '.join(STATE_CMD)}")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+# Method 4b: Try to find state script in STATE_REPO_DIR
 if STATE_CMD is None and os.path.exists(STATE_REPO_DIR):
-    # Check for common CLI script locations
+    # Try to find CLI script in scripts directory
     state_scripts = [
         os.path.join(STATE_REPO_DIR, 'scripts', 'state'),
-        os.path.join(STATE_REPO_DIR, 'src', 'state', '__main__.py'),
-        os.path.join(STATE_REPO_DIR, 'src', 'state', 'cli', '__main__.py'),
     ]
     for script_path in state_scripts:
         if os.path.exists(script_path):
-            STATE_CMD = [sys.executable, script_path]
-            print(f"✅ Using state command: {' '.join(STATE_CMD)}")
+            STATE_CMD = [script_path]
+            print(f"✅ Using state command: {script_path}")
             break
 
 # Method 5: Try using entry_points from installed package to find script location
@@ -821,6 +830,7 @@ except ImportError:
 print(f"Training command:\n{' '.join(train_cmd_parts)}\n")
 
 # Execute training command
+# Note: python -m state should work from any directory if STATE is properly installed
 subprocess.run(train_cmd_parts, check=False)
 
 """### 🎯 Validation and Metrics Configuration

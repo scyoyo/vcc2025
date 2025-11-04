@@ -32,7 +32,14 @@ cd ..
 ### 3. 配置 WandB（可选）
 
 ```bash
+# 如果 wandb 命令找不到，先添加到 PATH
+export PATH="$HOME/.local/bin:$PATH"
+
+# 然后登录 WandB
 wandb login
+
+# 或者使用 Python API 登录（如果命令不可用）
+python -c "import wandb; wandb.login()"
 ```
 
 ## ⚙️ 配置
@@ -86,6 +93,16 @@ python state_highmfu_v2.py
 **数据未找到**: 检查 `VCC_DATA_DIR` 环境变量，或手动下载数据到 `competition_support_set/`
 
 **STATE 未找到**: 确保已安装 STATE 框架，或设置 `STATE_REPO_DIR` 环境变量
+
+**wandb 命令找不到**: 
+```bash
+# 添加到 PATH
+export PATH="$HOME/.local/bin:$PATH"
+# 或者使用 Python API
+python -c "import wandb; wandb.login()"
+```
+
+**hydra 模块未找到**: 重新安装 STATE 框架：`cd state && pip install -e .`
 
 ## 📚 相关资源
 

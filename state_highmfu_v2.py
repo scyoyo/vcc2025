@@ -76,8 +76,12 @@ print(f"   export VCC_DATA_DIR=/path/to/data")
 print(f"   export STATE_REPO_DIR=/path/to/state/repo")
 print("=" * 70)
 
-# Check if STATE repository exists
-if not os.path.exists(STATE_REPO_DIR) or not os.path.exists(os.path.join(STATE_REPO_DIR, 'setup.py')):
+# Check if STATE repository exists (check for setup.py or pyproject.toml)
+state_setup_file = os.path.join(STATE_REPO_DIR, 'setup.py')
+state_pyproject = os.path.join(STATE_REPO_DIR, 'pyproject.toml')
+state_src_dir = os.path.join(STATE_REPO_DIR, 'src')
+
+if not os.path.exists(STATE_REPO_DIR) or (not os.path.exists(state_setup_file) and not os.path.exists(state_pyproject)):
     print(f"\n❌ STATE repository not found at {STATE_REPO_DIR}")
     print(f"\n📋 Please install STATE framework first:")
     print(f"   1. Clone the STATE repository:")
@@ -355,7 +359,8 @@ except ImportError:
     print("⏳ Takes ~1 minute...")
 
     # Install with pip to system Python
-    if os.path.exists('setup.py'):
+    # Check for setup.py or pyproject.toml (modern Python packages)
+    if os.path.exists('setup.py') or os.path.exists('pyproject.toml'):
         result = subprocess.run(['pip', 'install', '-e', '.', '-q'], 
                               capture_output=True, text=True)
         if result.returncode != 0:
@@ -363,7 +368,7 @@ except ImportError:
         else:
             print("✅ Installation complete!")
     else:
-        print("⚠️  setup.py not found. Please install STATE manually:")
+        print("⚠️  setup.py or pyproject.toml not found. Please install STATE manually:")
         print("   pip install -e /path/to/state")
     
     # Try to show help, but don't fail if command not found

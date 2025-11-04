@@ -10,6 +10,10 @@ tqdm>=4.64.0
 # HTTP requests (for downloading data)
 requests>=2.28.0
 
+# Transformers (required by STATE framework)
+# STATE requires transformers 4.x (GPT2Model API compatibility)
+transformers>=4.30.0,<4.42.0
+
 # Note: STATE framework will install hydra-core and other dependencies
 # If you encounter "No module named 'hydra'" error, install STATE:
 #   cd state && pip install -e .

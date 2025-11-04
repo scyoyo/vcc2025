@@ -55,6 +55,10 @@ export STATE_REPO_DIR=/path/to/state
 
 # GPU 数量（默认：使用所有 GPU）
 export NUM_GPUS=4
+
+# WandB 配置（可选，默认使用当前登录用户）
+export WANDB_ENTITY=your_wandb_username  # 如果不设置，会自动使用当前登录用户
+export WANDB_PROJECT=vcc                 # 项目名称（默认：vcc）
 ```
 
 ### GPU 配置
@@ -83,7 +87,7 @@ python state_highmfu_v2.py
 
 ## 📊 训练监控
 
-- WandB Dashboard: https://wandb.ai/cyshen/vcc
+- WandB Dashboard: 自动使用当前登录用户的项目（https://wandb.ai/your_username/vcc）
 - 预期训练时间：1-2 小时（多 GPU）/ 2-2.5 小时（单 GPU）
 
 ## 🔧 常见问题
@@ -103,6 +107,14 @@ python -c "import wandb; wandb.login()"
 ```
 
 **hydra 模块未找到**: 重新安装 STATE 框架：`cd state && pip install -e .`
+
+**transformers 导入错误 (`ImportError: cannot import name 'GPT2Model'`)**:
+```bash
+# STATE 框架需要 transformers 4.x 版本
+pip install "transformers>=4.30.0,<4.42.0"
+# 或者安装特定版本
+pip install transformers==4.41.2
+```
 
 ## 📚 相关资源
 

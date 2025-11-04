@@ -726,6 +726,17 @@ import os
 # os.environ['WANDB_MODE'] = 'offline'
 print("✅ WandB online mode - 实时监控训练进度")
 
+# Get WandB entity from environment variable (optional)
+# If not set, WandB will automatically use the logged-in user's default entity
+wandb_entity = os.environ.get('WANDB_ENTITY')
+if wandb_entity:
+    print(f"✅ Using WandB entity from environment: {wandb_entity}")
+else:
+    print("✅ WandB entity not set - will use logged-in user's default entity")
+
+# Get WandB project (can also be set via environment variable)
+wandb_project = os.environ.get('WANDB_PROJECT', 'vcc')
+
 # 2. HIGH MFU训练命令
 # Build command as list to handle paths with spaces correctly
 pert_features_file = os.path.join(LOCAL_DATA_DIR, 'ESM2_pert_features.pt')
@@ -767,12 +778,15 @@ train_cmd_parts = STATE_CMD + [
     '++training.precision=16-mixed',
     '++training.log_every_n_steps=50',
     'wandb.tags=[high_mfu,optimized]',
-    'wandb.project=vcc',
-    'wandb.entity=cyshen',
+    f'wandb.project={wandb_project}',
     '+wandb.log_model=true',
     f'output_dir={OUTPUT_DIR}',
     f'name={RUN_NAME}'
 ]
+
+# Add WandB entity if specified (optional - WandB will use logged-in user if not set)
+if wandb_entity:
+    train_cmd_parts.append(f'wandb.entity={wandb_entity}')
 
 # Add multi-GPU strategy if multiple GPUs available
 if num_gpus > 1:
@@ -858,7 +872,10 @@ import glob
 
 def show_training_progress():
     """Display training status and WandB link"""
-
+    # Get WandB config (re-read from environment or use defaults)
+    entity = os.environ.get('WANDB_ENTITY', '')
+    project = os.environ.get('WANDB_PROJECT', 'vcc')
+    
     print("📊 Training Monitoring")
     print("=" * 70)
 
@@ -874,7 +891,10 @@ def show_training_progress():
             print(f"   Latest: {os.path.basename(latest)}")
 
         print("\n📈 View metrics in WandB:")
-        print("   🔗 https://wandb.ai/cyshen/vcc")
+        if entity:
+            print(f"   🔗 https://wandb.ai/{entity}/{project}")
+        else:
+            print(f"   🔗 https://wandb.ai (使用当前登录用户的项目: {project})")
         print("\n📊 Tracked metrics:")
         print("   • val/pearson - Pearson correlation (VCC2025 main metric) ⭐")
         print("   • val/spearman - Spearman correlation")

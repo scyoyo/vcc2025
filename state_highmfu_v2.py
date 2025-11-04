@@ -76,22 +76,24 @@ print(f"   export VCC_DATA_DIR=/path/to/data")
 print(f"   export STATE_REPO_DIR=/path/to/state/repo")
 print("=" * 70)
 
-# Check if STATE repository exists, clone if needed
+# Check if STATE repository exists
 if not os.path.exists(STATE_REPO_DIR) or not os.path.exists(os.path.join(STATE_REPO_DIR, 'setup.py')):
-    print(f"\n📦 STATE repository not found at {STATE_REPO_DIR}")
-    print("Cloning repository...")
-    result = subprocess.run(['git', 'clone', 'https://github.com/ArcInstitute/state.git', STATE_REPO_DIR], 
-                          capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"⚠️  Git clone failed: {result.stderr}")
-        print("Please clone manually or ensure STATE is installed via pip")
-    else:
-        print(f"✅ Repository cloned to {STATE_REPO_DIR}")
+    print(f"\n❌ STATE repository not found at {STATE_REPO_DIR}")
+    print(f"\n📋 Please install STATE framework first:")
+    print(f"   1. Clone the STATE repository:")
+    print(f"      git clone https://github.com/ArcInstitute/state.git {STATE_REPO_DIR}")
+    print(f"   2. Install STATE:")
+    print(f"      cd {STATE_REPO_DIR}")
+    print(f"      pip install -e .")
+    print(f"\n   Or set STATE_REPO_DIR to an existing STATE installation:")
+    print(f"      export STATE_REPO_DIR=/path/to/state")
+    raise FileNotFoundError(f"STATE repository not found at {STATE_REPO_DIR}. Please install STATE first.")
 else:
     print(f"✅ STATE repository found at {STATE_REPO_DIR}")
 
 # Change to STATE repo directory if it exists
 if os.path.exists(STATE_REPO_DIR):
+    original_cwd = os.getcwd()
     os.chdir(STATE_REPO_DIR)
     print(f"📂 Changed to directory: {os.getcwd()}")
 

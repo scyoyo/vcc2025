@@ -163,7 +163,7 @@ if torch.cuda.is_available():
     # Optimize: High GPU, Low System RAM
     # RTX 5090 has 32GB, treat similar to A100 but with RTX optimizations
     if gpu_memory >= 30:  # RTX 5090, A100, etc.
-        num_workers = 12  # HIGH MFU: 更多workers用于RTX 5090
+        num_workers = 24  # 提升并行加载，配合NVMe与多核CPU
         cell_set_length = 4096
         model_size = "state_lg"  # Use large model for high-end GPUs
         if "RTX 5090" in gpu_name or "5090" in gpu_name:
@@ -562,8 +562,8 @@ gc.collect()
 # Set PyTorch to use less system memory
 os.environ['PYTORCH_ALLOC_CONF'] = 'max_split_size_mb:512,expandable_segments:True'
 
-# Reduce dataloader prefetch to save memory
-os.environ['PREFETCH_FACTOR'] = '2'
+    # Increase dataloader prefetch to feed GPUs better
+    os.environ['PREFETCH_FACTOR'] = '16'
 
 # If still high memory, reduce workers here:
 # num_workers = 4  # Uncomment if memory is still too high
@@ -765,16 +765,9 @@ wandb_project = os.environ.get('WANDB_PROJECT', 'vcc')
 pert_features_file = os.path.join(LOCAL_DATA_DIR, 'ESM2_pert_features.pt')
 
 # Adjust gradient accumulation based on number of GPUs
-# With multiple GPUs, we can reduce gradient accumulation since effective batch is larger
+# With multiple GPUs, prefer per-step compute (set GA=1)
 if num_gpus > 1:
-    # For multi-GPU, reduce gradient accumulation proportionally
-    # Base: 8x for single GPU, reduce to 4x for 2-4 GPUs, 2x for 5+ GPUs
-    if num_gpus >= 5:
-        gradient_accumulation_steps = 2
-    elif num_gpus >= 2:
-        gradient_accumulation_steps = 4
-    else:
-        gradient_accumulation_steps = 8
+    gradient_accumulation_steps = 1
     print(f"💡 Multi-GPU detected: Reducing gradient accumulation to {gradient_accumulation_steps}x")
     print(f"   (Effective batch size: {num_gpus} GPUs × {gradient_accumulation_steps} = {num_gpus * gradient_accumulation_steps}x)")
 else:
@@ -790,12 +783,14 @@ train_cmd_parts = STATE_CMD + [
     'data.kwargs.control_pert=non-targeting',
     f'data.kwargs.perturbation_features_file={pert_features_file}',
     '++data.kwargs.persistent_workers=True',
-    '++data.kwargs.prefetch_factor=4',
+    '++data.kwargs.prefetch_factor=12',
     '++data.kwargs.pin_memory=True',
     'training.max_steps=40000',
     'training.ckpt_every_n_steps=5000',
     '++training.val_check_interval=2000',
     '++training.limit_val_batches=1.0',
+    # Set/override per-GPU batch size (env BATCH_SIZE can override at runtime)
+    f'++data.kwargs.batch_size={int(os.environ.get("BATCH_SIZE", "96"))}',
     f'++training.gradient_accumulation_steps={gradient_accumulation_steps}',
     f'model={model_size}',
     '++training.precision=16-mixed',
@@ -815,8 +810,8 @@ if wandb_entity:
 if num_gpus > 1:
     train_cmd_parts.append('++training.accelerator=gpu')
     train_cmd_parts.append(f'++training.devices={num_gpus}')
-    # Use ddp_find_unused_parameters_true to handle unused parameters in STATE model
-    train_cmd_parts.append('++training.strategy=ddp_find_unused_parameters_true')
+    # Prefer ddp for lower overhead; fallback to ddp_find_unused_parameters_true on error
+    train_cmd_parts.append('++training.strategy=ddp')
     print(f"✅ Multi-GPU training enabled: {num_gpus} GPUs with DDP strategy (find_unused_parameters=True)")
 elif num_gpus == 1:
     train_cmd_parts.append('++training.accelerator=gpu')

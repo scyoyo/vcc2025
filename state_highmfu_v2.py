@@ -163,23 +163,49 @@ if torch.cuda.is_available():
     # Optimize: High GPU, Low System RAM
     # RTX 5090 has 32GB, treat similar to A100 but with RTX optimizations
     if gpu_memory >= 30:  # RTX 5090, A100, etc.
-        num_workers = 12  # HIGH MFU: 更多workers用于RTX 5090
+        num_workers = 24  # HIGH MFU: 128核CPU，进一步提升并行数据加载
         cell_set_length = 4096
         model_size = "state_lg"  # Use large model for high-end GPUs
+        # Smart batch size selection based on GPU memory
+        # Can be overridden by BATCH_SIZE env var
+        env_batch_size = os.environ.get('BATCH_SIZE')
+        if env_batch_size:
+            try:
+                batch_size = int(env_batch_size)
+                print(f"✅ Using batch_size from BATCH_SIZE env var: {batch_size}")
+            except ValueError:
+                batch_size = 96  # Default aggressive
+        else:
+            # Auto-select based on GPU memory: 32GB -> 96, can use up to 128
+            # Conservative: 64, Standard: 80, Aggressive: 96
+            if gpu_memory >= 32:
+                batch_size = 96  # Aggressive: 充分利用32GB显存
+            else:
+                batch_size = 80  # Standard for 30-32GB
         if "RTX 5090" in gpu_name or "5090" in gpu_name:
             print("✨ RTX 5090: High-end GPU with 32GB - Optimal configuration")
+            print(f"   • Batch size: {batch_size} (可通过 BATCH_SIZE 环境变量调整)")
+            print(f"   • 如果OOM，尝试: export BATCH_SIZE=64 或 export BATCH_SIZE=48")
         else:
             print("✨ High-end GPU (30GB+): Large batch, low RAM")
+            print(f"   • Batch size: {batch_size}")
     elif gpu_memory >= 20:  # L4/T4, RTX 3090, etc.
         num_workers = 8  # HIGH MFU: 从4提升
         cell_set_length = 4096
         model_size = "state_sm"
+        env_batch_size = os.environ.get('BATCH_SIZE')
+        batch_size = int(env_batch_size) if env_batch_size and env_batch_size.isdigit() else 32
         print("✨ Mid-range GPU (20-30GB): Medium-large batch, low RAM")
+        print(f"   • Batch size: {batch_size}")
     else:
         num_workers = 4
         cell_set_length = 2048
         model_size = "state_sm"
+        env_batch_size = os.environ.get('BATCH_SIZE')
+        batch_size = int(env_batch_size) if env_batch_size and env_batch_size.isdigit() else None
         print("✨ Standard GPU: balanced")
+        if batch_size:
+            print(f"   • Batch size: {batch_size}")
 
     print(f"\n📊 Configuration:")
     print(f"  • Available GPUs: {total_gpus}")
@@ -204,6 +230,7 @@ else:
     num_workers = 2
     model_size = "state_sm"
     num_gpus = 0
+    batch_size = None
 
 print("=" * 70)
 
@@ -659,22 +686,21 @@ if RESUME_TRAINING:
 
 print("=" * 70)
 
-# Disable verbose INFO logs (FLOPs, etc.) - RUN THIS BEFORE TRAINING!
+# Reduce verbose INFO logs (FLOPs, etc.) - RUN THIS BEFORE TRAINING!
+# Note: We set to WARNING instead of ERROR to allow WandB logging
 import logging
 import os
 
-# Disable FLOPs callback completely
-logging.getLogger('state.tx.callbacks.cumulative_flops').setLevel(logging.ERROR)
-logging.getLogger('state.tx.callbacks').setLevel(logging.ERROR)
+# Reduce FLOPs callback verbosity but keep WandB logging
+logging.getLogger('state.tx.callbacks.cumulative_flops').setLevel(logging.WARNING)
+logging.getLogger('state.tx.callbacks').setLevel(logging.WARNING)
 
+# Suppress other verbose loggers (but keep WandB metrics)
+for logger_name in ['pytorch_lightning.utilities', 'pytorch_lightning.callbacks']:
+    logging.getLogger(logger_name).setLevel(logging.WARNING)
 
-# Suppress other verbose loggers
-for logger_name in ['state.tx.callbacks.cumulative_flops', 'pytorch_lightning.utilities',
-                    'pytorch_lightning.callbacks']:
-    logging.getLogger(logger_name).setLevel(logging.ERROR)
-
-print("✅ All verbose logs suppressed (FLOPs, etc.)")
-print("💡 Training output will be cleaner now")
+print("✅ Verbose console logs reduced (MFU will still be logged to WandB)")
+print("💡 Training output will be cleaner, but MFU metrics remain in WandB dashboard")
 
 """## 7. Optimized Training
 
@@ -724,21 +750,24 @@ print(f"\n💡 Expected speedup: 2-4x faster than original!")
 print("=" * 80)
 
 import logging
-# Disable FLOPs callback logging
-logging.getLogger('state.tx.callbacks.cumulative_flops').disabled = True
+# Disable FLOPs callback verbose console logging (but keep WandB logging)
+# Set to WARNING instead of ERROR to allow WandB logging while suppressing console spam
+logging.getLogger('state.tx.callbacks.cumulative_flops').setLevel(logging.WARNING)
 # Suppress ModelFLOPSUtilizationCallback print output by patching the print function
+# This only suppresses console output, WandB logging will still work
 import builtins
 _original_print = builtins.print
 
 def _filtered_print(*args, **kwargs):
-    """Filter out FLOPs messages from print output"""
+    """Filter out FLOPs messages from print output (but allow WandB logging)"""
     message = ' '.join(str(arg) for arg in args)
     if 'ModelFLOPSUtilizationCallback' not in message and 'Measured FLOPs per batch' not in message:
         _original_print(*args, **kwargs)
 
 # Apply the filter
 builtins.print = _filtered_print
-print("✅ FLOPs callback output suppressed")
+print("✅ FLOPs callback console output suppressed (WandB logging still enabled)")
+print("💡 MFU metrics will still be logged to WandB for monitoring")
 
 # HIGH MFU优化训练（AI Team Phase 3-4建议）
 
@@ -756,28 +785,49 @@ wandb_entity = os.environ.get('WANDB_ENTITY')
 if not wandb_entity:
     try:
         import wandb
+        # Use wandb API to get current user
         try:
             api = wandb.Api()
-            # viewer is a property, not a method - access it directly
+            # viewer is a property that returns User object - access username directly
             viewer = api.viewer
-            if hasattr(viewer, 'username'):
-                detected_entity = viewer.username
-            elif hasattr(viewer, '__dict__'):
-                detected_entity = viewer.__dict__.get('username') or viewer.__dict__.get('entity')
-            else:
-                # Try calling as method (some versions)
-                try:
-                    viewer_info = api.viewer()
-                    detected_entity = viewer_info.get('username') if isinstance(viewer_info, dict) else getattr(viewer_info, 'username', None)
-                except:
-                    detected_entity = None
+            # Try different ways to access username
+            detected_entity = None
+            if viewer:
+                # Method 1: Direct attribute access
+                if hasattr(viewer, 'username'):
+                    try:
+                        detected_entity = viewer.username
+                    except:
+                        pass
+                
+                # Method 2: Try getattr
+                if not detected_entity:
+                    try:
+                        detected_entity = getattr(viewer, 'username', None)
+                    except:
+                        pass
+                
+                # Method 3: Try accessing as dict
+                if not detected_entity:
+                    try:
+                        if isinstance(viewer, dict):
+                            detected_entity = viewer.get('username')
+                        elif hasattr(viewer, '__dict__'):
+                            detected_entity = viewer.__dict__.get('username')
+                    except:
+                        pass
             
             if detected_entity:
                 wandb_entity = detected_entity
                 print(f"✅ Auto-detected WandB entity: {wandb_entity}")
+            else:
+                print("⚠️  Could not auto-detect WandB entity from API")
+                print("   Will use default entity (logged-in user)")
+                print("   💡 Tip: Set WANDB_ENTITY=cyshen to explicitly specify")
         except Exception as e:
-            print(f"⚠️  Could not auto-detect WandB entity: {e}")
+            print(f"⚠️  Could not access WandB API: {e}")
             print("   Will use default entity (logged-in user)")
+            print("   💡 Tip: Set WANDB_ENTITY=cyshen to explicitly specify")
     except ImportError:
         pass
 
@@ -797,14 +847,8 @@ pert_features_file = os.path.join(LOCAL_DATA_DIR, 'ESM2_pert_features.pt')
 # Adjust gradient accumulation based on number of GPUs
 # With multiple GPUs, we can reduce gradient accumulation since effective batch is larger
 if num_gpus > 1:
-    # For multi-GPU, reduce gradient accumulation proportionally
-    # Base: 8x for single GPU, reduce to 4x for 2-4 GPUs, 2x for 5+ GPUs
-    if num_gpus >= 5:
-        gradient_accumulation_steps = 2
-    elif num_gpus >= 2:
-        gradient_accumulation_steps = 4
-    else:
-        gradient_accumulation_steps = 8
+    # With strong CPU and NVMe, prefer larger per-step batch; set GA to 1
+    gradient_accumulation_steps = 1
     print(f"💡 Multi-GPU detected: Reducing gradient accumulation to {gradient_accumulation_steps}x")
     print(f"   (Effective batch size: {num_gpus} GPUs × {gradient_accumulation_steps} = {num_gpus * gradient_accumulation_steps}x)")
 else:
@@ -820,8 +864,28 @@ train_cmd_parts = STATE_CMD + [
     'data.kwargs.control_pert=non-targeting',
     f'data.kwargs.perturbation_features_file={pert_features_file}',
     '++data.kwargs.persistent_workers=True',
-    '++data.kwargs.prefetch_factor=4',
+    '++data.kwargs.prefetch_factor=12',
     '++data.kwargs.pin_memory=True',
+]
+
+# Add batch size if configured (smart auto-selection or from env var)
+if 'batch_size' in locals() and batch_size is not None:
+    train_cmd_parts.append(f'++data.kwargs.batch_size={batch_size}')
+    print(f"✅ Batch size set to {batch_size} per GPU")
+    estimated_memory_gb = batch_size * 0.35  # Rough estimate: ~0.35GB per batch unit for state_lg
+    print(f"   • Estimated memory usage: ~{estimated_memory_gb:.1f}GB per GPU")
+    # Check if gpu_memory is available for warning
+    if 'gpu_memory' in locals() and gpu_memory:
+        if estimated_memory_gb > gpu_memory * 0.9:
+            print(f"   ⚠️  Warning: Estimated memory ({estimated_memory_gb:.1f}GB) may exceed GPU capacity ({gpu_memory:.1f}GB)")
+            print(f"   💡 If OOM occurs, reduce batch size: export BATCH_SIZE={batch_size // 2}")
+        else:
+            print(f"   ✅ Estimated memory ({estimated_memory_gb:.1f}GB) is safe for GPU ({gpu_memory:.1f}GB)")
+else:
+    print("⚠️  Batch size not set - will use STATE default")
+    print("   💡 To set: export BATCH_SIZE=64 (or 48 for conservative, 96 for aggressive)")
+
+train_cmd_parts.extend([
     'training.max_steps=40000',
     'training.ckpt_every_n_steps=5000',
     '++training.val_check_interval=2000',

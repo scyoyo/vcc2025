@@ -749,16 +749,36 @@ import os
 # os.environ['WANDB_MODE'] = 'offline'
 print("✅ WandB online mode - 实时监控训练进度")
 
-# Get WandB entity from environment variable (optional)
-# If not set, WandB will automatically use the logged-in user's default entity
+# Get WandB entity from environment variable or auto-detect logged-in user
 wandb_entity = os.environ.get('WANDB_ENTITY')
+
+# Try to auto-detect WandB entity if not set
+if not wandb_entity:
+    try:
+        import wandb
+        try:
+            api = wandb.Api()
+            viewer = api.viewer()
+            detected_entity = viewer.get('username') or viewer.get('entity')
+            if detected_entity:
+                wandb_entity = detected_entity
+                print(f"✅ Auto-detected WandB entity: {wandb_entity}")
+        except Exception as e:
+            print(f"⚠️  Could not auto-detect WandB entity: {e}")
+            print("   Will use default entity (logged-in user)")
+    except ImportError:
+        pass
+
 if wandb_entity:
-    print(f"✅ Using WandB entity from environment: {wandb_entity}")
+    print(f"✅ WandB entity: {wandb_entity}")
 else:
-    print("✅ WandB entity not set - will use logged-in user's default entity")
+    print("⚠️  WandB entity not set - will use default entity")
+    print("   To set explicitly, use: export WANDB_ENTITY=your_username")
 
 # Get WandB project (can also be set via environment variable)
 wandb_project = os.environ.get('WANDB_PROJECT', 'vcc')
+print(f"✅ WandB project: {wandb_project}")
+print(f"💡 Data will be saved to: https://wandb.ai/{wandb_entity if wandb_entity else 'your-username'}/{wandb_project}")
 
 # 2. HIGH MFU训练命令
 # Build command as list to handle paths with spaces correctly
@@ -807,9 +827,14 @@ train_cmd_parts = STATE_CMD + [
     f'name={RUN_NAME}'
 ]
 
-# Add WandB entity if specified (optional - WandB will use logged-in user if not set)
+# Add WandB entity - always specify to ensure data goes to correct user
+# If entity is detected or set, use it; otherwise STATE will use default
 if wandb_entity:
     train_cmd_parts.append(f'wandb.entity={wandb_entity}')
+    print(f"✅ WandB entity will be set to: {wandb_entity}")
+else:
+    print("⚠️  WandB entity not specified - will use default entity")
+    print("   If data is not saved to expected user, set: export WANDB_ENTITY=your_username")
 
 # Add multi-GPU strategy if multiple GPUs available
 if num_gpus > 1:
@@ -842,6 +867,13 @@ if num_gpus > 1:
 print(f"✅ Validation: 每2000步 (更频繁监控)")
 print(f"✅ Checkpoint: 每5000步 (vs 10000步)")
 print(f"✅ WandB: 在线模式 (实时监控)")
+print(f"   • Project: {wandb_project}")
+if wandb_entity:
+    print(f"   • Entity: {wandb_entity}")
+    print(f"   • Dashboard: https://wandb.ai/{wandb_entity}/{wandb_project}")
+else:
+    print(f"   • Entity: (使用默认entity)")
+    print(f"   • Dashboard: https://wandb.ai/your-username/{wandb_project}")
 print(f"")
 if num_gpus > 1:
     print(f"🎯 预期MFU: 10-15% (多GPU加速)")
@@ -849,6 +881,12 @@ if num_gpus > 1:
 else:
     print(f"🎯 预期MFU: 8-12% (vs 1.5% baseline)")
     print(f"🎯 预期时间: 2-2.5小时 (vs 3-4小时)")
+print("")
+print("💡 MFU 优化说明:")
+print("   • MFU < 5%: 数据加载或batch size可能是瓶颈")
+print("   • MFU 5-10%: 正常范围，可以进一步优化")
+print("   • MFU > 10%: 优秀，GPU利用率高")
+print("   • 如果MFU较低，检查: batch size, num_workers, 数据加载速度")
 print("="*80)
 
 print("\n🚀 Starting HIGH MFU training...\n")

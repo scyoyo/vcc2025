@@ -749,36 +749,16 @@ import os
 # os.environ['WANDB_MODE'] = 'offline'
 print("✅ WandB online mode - 实时监控训练进度")
 
-# Get WandB entity from environment variable or auto-detect logged-in user
+# Get WandB entity from environment variable (optional)
+# If not set, WandB will automatically use the logged-in user's default entity
 wandb_entity = os.environ.get('WANDB_ENTITY')
-
-# Try to auto-detect WandB entity if not set
-if not wandb_entity:
-    try:
-        import wandb
-        try:
-            api = wandb.Api()
-            viewer = api.viewer()
-            detected_entity = viewer.get('username') or viewer.get('entity')
-            if detected_entity:
-                wandb_entity = detected_entity
-                print(f"✅ Auto-detected WandB entity: {wandb_entity}")
-        except Exception as e:
-            print(f"⚠️  Could not auto-detect WandB entity: {e}")
-            print("   Will use default entity (logged-in user)")
-    except ImportError:
-        pass
-
 if wandb_entity:
-    print(f"✅ WandB entity: {wandb_entity}")
+    print(f"✅ Using WandB entity from environment: {wandb_entity}")
 else:
-    print("⚠️  WandB entity not set - will use default entity")
-    print("   To set explicitly, use: export WANDB_ENTITY=your_username")
+    print("✅ WandB entity not set - will use logged-in user's default entity")
 
 # Get WandB project (can also be set via environment variable)
 wandb_project = os.environ.get('WANDB_PROJECT', 'vcc')
-print(f"✅ WandB project: {wandb_project}")
-print(f"💡 Data will be saved to: https://wandb.ai/{wandb_entity if wandb_entity else 'your-username'}/{wandb_project}")
 
 # 2. HIGH MFU训练命令
 # Build command as list to handle paths with spaces correctly
@@ -827,14 +807,9 @@ train_cmd_parts = STATE_CMD + [
     f'name={RUN_NAME}'
 ]
 
-# Add WandB entity - always specify to ensure data goes to correct user
-# If entity is detected or set, use it; otherwise STATE will use default
+# Add WandB entity if specified (optional - WandB will use logged-in user if not set)
 if wandb_entity:
     train_cmd_parts.append(f'wandb.entity={wandb_entity}')
-    print(f"✅ WandB entity will be set to: {wandb_entity}")
-else:
-    print("⚠️  WandB entity not specified - will use default entity")
-    print("   If data is not saved to expected user, set: export WANDB_ENTITY=your_username")
 
 # Add multi-GPU strategy if multiple GPUs available
 if num_gpus > 1:
@@ -854,7 +829,8 @@ if RESUME_TRAINING:
     if ckpts:
         latest_ckpt = max(ckpts, key=os.path.getmtime)
         print(f"🔄 Resuming from: {os.path.basename(latest_ckpt)}")
-        train_cmd_parts.append(f'training.resume_from_checkpoint={latest_ckpt}')
+        # Quote the checkpoint path because it contains '=' (Hydra override requires quoting)
+        train_cmd_parts.append(f'training.resume_from_checkpoint="{latest_ckpt}"')
 
 print("="*80)
 print("🚀 HIGH MFU TRAINING CONFIGURATION")
@@ -867,13 +843,6 @@ if num_gpus > 1:
 print(f"✅ Validation: 每2000步 (更频繁监控)")
 print(f"✅ Checkpoint: 每5000步 (vs 10000步)")
 print(f"✅ WandB: 在线模式 (实时监控)")
-print(f"   • Project: {wandb_project}")
-if wandb_entity:
-    print(f"   • Entity: {wandb_entity}")
-    print(f"   • Dashboard: https://wandb.ai/{wandb_entity}/{wandb_project}")
-else:
-    print(f"   • Entity: (使用默认entity)")
-    print(f"   • Dashboard: https://wandb.ai/your-username/{wandb_project}")
 print(f"")
 if num_gpus > 1:
     print(f"🎯 预期MFU: 10-15% (多GPU加速)")
@@ -1028,18 +997,31 @@ else:
 
 """
 
-# Run inference with the final checkpoint (step=40000)
-# Change the checkpoint step if using a different one
+# Run inference with the latest available checkpoint (fallback if 40k not present)
+ckpt_dir = f'{OUTPUT_DIR}/{RUN_NAME}/checkpoints'
+chosen_ckpt = f'{ckpt_dir}/step=40000.ckpt'
+try:
+    if not os.path.exists(chosen_ckpt):
+        all_ckpts = [p for p in glob.glob(f'{ckpt_dir}/*.ckpt') if os.path.isfile(p)]
+        if all_ckpts:
+            chosen_ckpt = max(all_ckpts, key=os.path.getmtime)
+            print(f"⚠️  step=40000.ckpt not found, using latest: {os.path.basename(chosen_ckpt)}")
+        else:
+            print("❌ No checkpoints found for inference.")
+            chosen_ckpt = None
+except Exception as _e:
+    chosen_ckpt = None
 
-infer_cmd = STATE_CMD + [
-    'tx', 'infer',
-    '--output', f'{OUTPUT_DIR}/prediction.h5ad',
-    '--model-dir', f'{OUTPUT_DIR}/{RUN_NAME}',
-    '--checkpoint', f'{OUTPUT_DIR}/{RUN_NAME}/checkpoints/step=40000.ckpt',
-    '--adata', f'{LOCAL_DATA_DIR}/competition_val_template.h5ad',
-    '--pert-col', 'target_gene'
-]
-subprocess.run(infer_cmd, check=False)
+if chosen_ckpt:
+    infer_cmd = STATE_CMD + [
+        'tx', 'infer',
+        '--output', f'{OUTPUT_DIR}/prediction.h5ad',
+        '--model-dir', f'{OUTPUT_DIR}/{RUN_NAME}',
+        '--checkpoint', f'{chosen_ckpt}',
+        '--adata', f'{LOCAL_DATA_DIR}/competition_val_template.h5ad',
+        '--pert-col', 'target_gene'
+    ]
+    subprocess.run(infer_cmd, check=False)
 
 """### Use Different Checkpoint
 

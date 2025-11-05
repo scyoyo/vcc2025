@@ -159,60 +159,27 @@ if torch.cuda.is_available():
             print(f"\n⚙️  Using all {use_num_gpus} GPU(s) (default)")
     
     num_gpus = use_num_gpus
-    # Enable cuDNN benchmark for faster convolutions on fixed input sizes
-    try:
-        import torch.backends.cudnn as cudnn
-        cudnn.benchmark = True
-        print("✅ cuDNN benchmark enabled")
-    except Exception:
-        pass
 
     # Optimize: High GPU, Low System RAM
     # RTX 5090 has 32GB, treat similar to A100 but with RTX optimizations
     if gpu_memory >= 30:  # RTX 5090, A100, etc.
-        num_workers = 32  # HIGH MFU: 128核CPU，进一步提升并行数据加载
+        num_workers = 12  # HIGH MFU: 更多workers用于RTX 5090
         cell_set_length = 4096
         model_size = "state_lg"  # Use large model for high-end GPUs
-        # Smart batch size selection based on GPU memory
-        # Can be overridden by BATCH_SIZE env var
-        env_batch_size = os.environ.get('BATCH_SIZE')
-        if env_batch_size:
-            try:
-                batch_size = int(env_batch_size)
-                print(f"✅ Using batch_size from BATCH_SIZE env var: {batch_size}")
-            except ValueError:
-                batch_size = 96  # Default aggressive
-        else:
-            # Auto-select based on GPU memory: 32GB -> 96, can use up to 128
-            # Conservative: 64, Standard: 80, Aggressive: 96
-            if gpu_memory >= 32:
-                batch_size = 128  # 更激进: 充分利用32GB显存
-            else:
-                batch_size = 80  # Standard for 30-32GB
         if "RTX 5090" in gpu_name or "5090" in gpu_name:
             print("✨ RTX 5090: High-end GPU with 32GB - Optimal configuration")
-            print(f"   • Batch size: {batch_size} (可通过 BATCH_SIZE 环境变量调整)")
-            print(f"   • 如果OOM，尝试: export BATCH_SIZE=64 或 export BATCH_SIZE=48")
         else:
             print("✨ High-end GPU (30GB+): Large batch, low RAM")
-            print(f"   • Batch size: {batch_size}")
     elif gpu_memory >= 20:  # L4/T4, RTX 3090, etc.
         num_workers = 8  # HIGH MFU: 从4提升
         cell_set_length = 4096
         model_size = "state_sm"
-        env_batch_size = os.environ.get('BATCH_SIZE')
-        batch_size = int(env_batch_size) if env_batch_size and env_batch_size.isdigit() else 32
         print("✨ Mid-range GPU (20-30GB): Medium-large batch, low RAM")
-        print(f"   • Batch size: {batch_size}")
     else:
         num_workers = 4
         cell_set_length = 2048
         model_size = "state_sm"
-        env_batch_size = os.environ.get('BATCH_SIZE')
-        batch_size = int(env_batch_size) if env_batch_size and env_batch_size.isdigit() else None
         print("✨ Standard GPU: balanced")
-        if batch_size:
-            print(f"   • Batch size: {batch_size}")
 
     print(f"\n📊 Configuration:")
     print(f"  • Available GPUs: {total_gpus}")
@@ -237,7 +204,6 @@ else:
     num_workers = 2
     model_size = "state_sm"
     num_gpus = 0
-    batch_size = None
 
 print("=" * 70)
 
@@ -597,7 +563,7 @@ gc.collect()
 os.environ['PYTORCH_ALLOC_CONF'] = 'max_split_size_mb:512,expandable_segments:True'
 
 # Reduce dataloader prefetch to save memory
-os.environ['PREFETCH_FACTOR'] = '16'
+os.environ['PREFETCH_FACTOR'] = '2'
 
 # If still high memory, reduce workers here:
 # num_workers = 4  # Uncomment if memory is still too high
@@ -693,21 +659,22 @@ if RESUME_TRAINING:
 
 print("=" * 70)
 
-# Reduce verbose INFO logs (FLOPs, etc.) - RUN THIS BEFORE TRAINING!
-# Note: We set to WARNING instead of ERROR to allow WandB logging
+# Disable verbose INFO logs (FLOPs, etc.) - RUN THIS BEFORE TRAINING!
 import logging
 import os
 
-# Reduce FLOPs callback verbosity but keep WandB logging
-logging.getLogger('state.tx.callbacks.cumulative_flops').setLevel(logging.WARNING)
-logging.getLogger('state.tx.callbacks').setLevel(logging.WARNING)
+# Disable FLOPs callback completely
+logging.getLogger('state.tx.callbacks.cumulative_flops').setLevel(logging.ERROR)
+logging.getLogger('state.tx.callbacks').setLevel(logging.ERROR)
 
-# Suppress other verbose loggers (but keep WandB metrics)
-for logger_name in ['pytorch_lightning.utilities', 'pytorch_lightning.callbacks']:
-    logging.getLogger(logger_name).setLevel(logging.WARNING)
 
-print("✅ Verbose console logs reduced (MFU will still be logged to WandB)")
-print("💡 Training output will be cleaner, but MFU metrics remain in WandB dashboard")
+# Suppress other verbose loggers
+for logger_name in ['state.tx.callbacks.cumulative_flops', 'pytorch_lightning.utilities',
+                    'pytorch_lightning.callbacks']:
+    logging.getLogger(logger_name).setLevel(logging.ERROR)
+
+print("✅ All verbose logs suppressed (FLOPs, etc.)")
+print("💡 Training output will be cleaner now")
 
 """## 7. Optimized Training
 
@@ -757,24 +724,21 @@ print(f"\n💡 Expected speedup: 2-4x faster than original!")
 print("=" * 80)
 
 import logging
-# Disable FLOPs callback verbose console logging (but keep WandB logging)
-# Set to WARNING instead of ERROR to allow WandB logging while suppressing console spam
-logging.getLogger('state.tx.callbacks.cumulative_flops').setLevel(logging.WARNING)
+# Disable FLOPs callback logging
+logging.getLogger('state.tx.callbacks.cumulative_flops').disabled = True
 # Suppress ModelFLOPSUtilizationCallback print output by patching the print function
-# This only suppresses console output, WandB logging will still work
 import builtins
 _original_print = builtins.print
 
 def _filtered_print(*args, **kwargs):
-    """Filter out FLOPs messages from print output (but allow WandB logging)"""
+    """Filter out FLOPs messages from print output"""
     message = ' '.join(str(arg) for arg in args)
     if 'ModelFLOPSUtilizationCallback' not in message and 'Measured FLOPs per batch' not in message:
         _original_print(*args, **kwargs)
 
 # Apply the filter
 builtins.print = _filtered_print
-print("✅ FLOPs callback console output suppressed (WandB logging still enabled)")
-print("💡 MFU metrics will still be logged to WandB for monitoring")
+print("✅ FLOPs callback output suppressed")
 
 # HIGH MFU优化训练（AI Team Phase 3-4建议）
 
@@ -785,64 +749,13 @@ import os
 # os.environ['WANDB_MODE'] = 'offline'
 print("✅ WandB online mode - 实时监控训练进度")
 
-# Get WandB entity from environment variable or auto-detect logged-in user
+# Get WandB entity from environment variable (optional)
+# If not set, WandB will automatically use the logged-in user's default entity
 wandb_entity = os.environ.get('WANDB_ENTITY')
-
-# Try to auto-detect WandB entity if not set
-if not wandb_entity:
-    try:
-        import wandb
-        # Use wandb API to get current user
-        try:
-            api = wandb.Api()
-            # viewer is a property that returns User object - access username directly
-            viewer = api.viewer
-            # Try different ways to access username
-            detected_entity = None
-            if viewer:
-                # Method 1: Direct attribute access
-                if hasattr(viewer, 'username'):
-                    try:
-                        detected_entity = viewer.username
-                    except:
-                        pass
-                
-                # Method 2: Try getattr
-                if not detected_entity:
-                    try:
-                        detected_entity = getattr(viewer, 'username', None)
-                    except:
-                        pass
-                
-                # Method 3: Try accessing as dict
-                if not detected_entity:
-                    try:
-                        if isinstance(viewer, dict):
-                            detected_entity = viewer.get('username')
-                        elif hasattr(viewer, '__dict__'):
-                            detected_entity = viewer.__dict__.get('username')
-                    except:
-                        pass
-            
-            if detected_entity:
-                wandb_entity = detected_entity
-                print(f"✅ Auto-detected WandB entity: {wandb_entity}")
-            else:
-                print("⚠️  Could not auto-detect WandB entity from API")
-                print("   Will use default entity (logged-in user)")
-                print("   💡 Tip: Set WANDB_ENTITY=cyshen to explicitly specify")
-        except Exception as e:
-            print(f"⚠️  Could not access WandB API: {e}")
-            print("   Will use default entity (logged-in user)")
-            print("   💡 Tip: Set WANDB_ENTITY=cyshen to explicitly specify")
-    except ImportError:
-        pass
-
 if wandb_entity:
-    print(f"✅ WandB entity: {wandb_entity}")
+    print(f"✅ Using WandB entity from environment: {wandb_entity}")
 else:
-    print("⚠️  WandB entity not set - will use default entity")
-    print("   To set explicitly, use: export WANDB_ENTITY=your_username")
+    print("✅ WandB entity not set - will use logged-in user's default entity")
 
 # Get WandB project (can also be set via environment variable)
 wandb_project = os.environ.get('WANDB_PROJECT', 'vcc')
@@ -854,11 +767,16 @@ pert_features_file = os.path.join(LOCAL_DATA_DIR, 'ESM2_pert_features.pt')
 # Adjust gradient accumulation based on number of GPUs
 # With multiple GPUs, we can reduce gradient accumulation since effective batch is larger
 if num_gpus > 1:
-    # With strong CPU and NVMe, prefer larger per-step batch; set GA to 1
-    gradient_accumulation_steps = 1
+    # For multi-GPU, reduce gradient accumulation proportionally
+    # Base: 8x for single GPU, reduce to 4x for 2-4 GPUs, 2x for 5+ GPUs
+    if num_gpus >= 5:
+        gradient_accumulation_steps = 2
+    elif num_gpus >= 2:
+        gradient_accumulation_steps = 4
+    else:
+        gradient_accumulation_steps = 8
     print(f"💡 Multi-GPU detected: Reducing gradient accumulation to {gradient_accumulation_steps}x")
-    effective_batch = num_gpus * gradient_accumulation_steps
-    print(f"   Effective batch size: {num_gpus} GPUs × {gradient_accumulation_steps} = {effective_batch}x")
+    print(f"   (Effective batch size: {num_gpus} GPUs × {gradient_accumulation_steps} = {num_gpus * gradient_accumulation_steps}x)")
 else:
     gradient_accumulation_steps = 8
 
@@ -872,34 +790,12 @@ train_cmd_parts = STATE_CMD + [
     'data.kwargs.control_pert=non-targeting',
     f'data.kwargs.perturbation_features_file={pert_features_file}',
     '++data.kwargs.persistent_workers=True',
-    '++data.kwargs.prefetch_factor=16',
+    '++data.kwargs.prefetch_factor=4',
     '++data.kwargs.pin_memory=True',
-]
-
-# Add batch size if configured (smart auto-selection or from env var)
-if 'batch_size' in locals() and batch_size is not None:
-    train_cmd_parts.append(f'++data.kwargs.batch_size={batch_size}')
-    print(f"✅ Batch size set to {batch_size} per GPU")
-    estimated_memory_gb = batch_size * 0.35  # Rough estimate: ~0.35GB per batch unit for state_lg
-    print(f"   • Estimated memory usage: ~{estimated_memory_gb:.1f}GB per GPU")
-    # Check if gpu_memory is available for warning
-    if 'gpu_memory' in locals() and gpu_memory:
-        if estimated_memory_gb > gpu_memory * 0.9:
-            print(f"   ⚠️  Warning: Estimated memory ({estimated_memory_gb:.1f}GB) may exceed GPU capacity ({gpu_memory:.1f}GB)")
-            reduced_batch = batch_size // 2
-            print(f"   💡 If OOM occurs, reduce batch size: export BATCH_SIZE={reduced_batch}")
-        else:
-            print(f"   ✅ Estimated memory ({estimated_memory_gb:.1f}GB) is safe for GPU ({gpu_memory:.1f}GB)")
-else:
-    print("⚠️  Batch size not set - will use STATE default")
-    print("   💡 To set: export BATCH_SIZE=64 (or 48 for conservative, 96 for aggressive)")
-
-train_cmd_parts.extend([
     'training.max_steps=40000',
     'training.ckpt_every_n_steps=5000',
     '++training.val_check_interval=2000',
     '++training.limit_val_batches=1.0',
-    '++training.num_sanity_val_steps=0',
     f'++training.gradient_accumulation_steps={gradient_accumulation_steps}',
     f'model={model_size}',
     '++training.precision=16-mixed',
@@ -909,7 +805,7 @@ train_cmd_parts.extend([
     '+wandb.log_model=true',
     f'output_dir={OUTPUT_DIR}',
     f'name={RUN_NAME}'
-])
+]
 
 # Add WandB entity if specified (optional - WandB will use logged-in user if not set)
 if wandb_entity:
@@ -919,8 +815,8 @@ if wandb_entity:
 if num_gpus > 1:
     train_cmd_parts.append('++training.accelerator=gpu')
     train_cmd_parts.append(f'++training.devices={num_gpus}')
-    # Prefer ddp for lower overhead; if unused params error occurs, switch back to ddp_find_unused_parameters_true
-    train_cmd_parts.append('++training.strategy=ddp')
+    # Use ddp_find_unused_parameters_true to handle unused parameters in STATE model
+    train_cmd_parts.append('++training.strategy=ddp_find_unused_parameters_true')
     print(f"✅ Multi-GPU training enabled: {num_gpus} GPUs with DDP strategy (find_unused_parameters=True)")
 elif num_gpus == 1:
     train_cmd_parts.append('++training.accelerator=gpu')
@@ -933,15 +829,13 @@ if RESUME_TRAINING:
     if ckpts:
         latest_ckpt = max(ckpts, key=os.path.getmtime)
         print(f"🔄 Resuming from: {os.path.basename(latest_ckpt)}")
-        # Use + prefix to add new config key, and quote path because it contains '='
-        # Hydra requires + prefix for adding keys that don't exist in the config struct
-        train_cmd_parts.append(f'+training.resume_from_checkpoint="{latest_ckpt}"')
+        train_cmd_parts.append(f'training.resume_from_checkpoint={latest_ckpt}')
 
 print("="*80)
 print("🚀 HIGH MFU TRAINING CONFIGURATION")
 print("="*80)
 print(f"✅ HDF5 Cache: 256MB (vs 1MB baseline)")
-print(f"✅ Workers: {num_workers} + persistent + prefetch=16")
+print(f"✅ Workers: {num_workers} + persistent + prefetch=4")
 print(f"✅ Grad Accumulation: {gradient_accumulation_steps}x (有效batch x{gradient_accumulation_steps})")
 if num_gpus > 1:
     print(f"✅ Multi-GPU: {num_gpus} GPUs (总有效batch x{num_gpus * gradient_accumulation_steps})")
@@ -979,82 +873,9 @@ except ImportError:
 
 print(f"Training command:\n{' '.join(train_cmd_parts)}\n")
 
-# Execute training command with automatic OOM retry
+# Execute training command
 # Note: python -m state should work from any directory if STATE is properly installed
-def run_training_with_oom_fallback():
-    """Run training with automatic batch size reduction on OOM"""
-    # Define fallback configurations (batch_size, gradient_accumulation)
-    fallback_configs = [
-        (128, 1),  # Aggressive (current)
-        (96, 1),   # Moderate
-        (80, 2),   # Conservative with more GA
-        (64, 2),   # Safe
-        (48, 4),   # Very safe
-    ]
-    
-    # Get current batch size from train_cmd_parts
-    current_batch_idx = None
-    for i, part in enumerate(train_cmd_parts):
-        if 'batch_size=' in part:
-            current_batch_idx = i
-            break
-    
-    # Try each configuration
-    for attempt, (batch_sz, grad_accum) in enumerate(fallback_configs, 1):
-        print(f"\n{'='*80}")
-        print(f"🔄 Training Attempt {attempt}/{len(fallback_configs)}")
-        print(f"   Batch size: {batch_sz}, Gradient accumulation: {grad_accum}")
-        print(f"{'='*80}\n")
-        
-        # Update batch size in command
-        if current_batch_idx is not None:
-            train_cmd_parts[current_batch_idx] = f'++data.kwargs.batch_size={batch_sz}'
-        else:
-            # Add batch size if not present
-            train_cmd_parts.insert(-8, f'++data.kwargs.batch_size={batch_sz}')
-            current_batch_idx = len(train_cmd_parts) - 9
-        
-        # Update gradient accumulation
-        for i, part in enumerate(train_cmd_parts):
-            if 'gradient_accumulation_steps=' in part:
-                train_cmd_parts[i] = f'++training.gradient_accumulation_steps={grad_accum}'
-                break
-        
-        # Run training
-        result = subprocess.run(train_cmd_parts, capture_output=False, text=True)
-        
-        # Check exit code
-        if result.returncode == 0:
-            print(f"\n✅ Training completed successfully with batch_size={batch_sz}, GA={grad_accum}")
-            return True
-        else:
-            # Check if it's an OOM error (exit code varies, so try next config)
-            print(f"\n⚠️  Training failed (exit code: {result.returncode})")
-            
-            if attempt < len(fallback_configs):
-                print(f"💡 Trying smaller batch size / larger gradient accumulation...")
-                import time
-                time.sleep(5)  # Brief pause before retry
-            else:
-                print(f"\n❌ All fallback configurations failed")
-                print(f"   Last attempt: batch_size={batch_sz}, GA={grad_accum}")
-                print(f"\n💡 Suggestions:")
-                print(f"   1. Reduce num_workers: export NUM_WORKERS=24 (or 16)")
-                print(f"   2. Use smaller model: Try state_sm instead of state_lg")
-                print(f"   3. Manually set batch: export BATCH_SIZE=32")
-                return False
-    
-    return False
-
-# Run with fallback
-success = run_training_with_oom_fallback()
-
-if not success:
-    print("\n" + "="*80)
-    print("⚠️  Training did not complete successfully")
-    print("="*80)
-    import sys
-    sys.exit(1)
+subprocess.run(train_cmd_parts, check=False)
 
 """### 🎯 Validation and Metrics Configuration
 
@@ -1175,31 +996,18 @@ else:
 
 """
 
-# Run inference with the latest available checkpoint (fallback if 40k not present)
-ckpt_dir = f'{OUTPUT_DIR}/{RUN_NAME}/checkpoints'
-chosen_ckpt = f'{ckpt_dir}/step=40000.ckpt'
-try:
-    if not os.path.exists(chosen_ckpt):
-        all_ckpts = [p for p in glob.glob(f'{ckpt_dir}/*.ckpt') if os.path.isfile(p)]
-        if all_ckpts:
-            chosen_ckpt = max(all_ckpts, key=os.path.getmtime)
-            print(f"⚠️  step=40000.ckpt not found, using latest: {os.path.basename(chosen_ckpt)}")
-        else:
-            print("❌ No checkpoints found for inference.")
-            chosen_ckpt = None
-except Exception as _e:
-    chosen_ckpt = None
+# Run inference with the final checkpoint (step=40000)
+# Change the checkpoint step if using a different one
 
-if chosen_ckpt:
-    infer_cmd = STATE_CMD + [
-        'tx', 'infer',
-        '--output', f'{OUTPUT_DIR}/prediction.h5ad',
-        '--model-dir', f'{OUTPUT_DIR}/{RUN_NAME}',
-        '--checkpoint', f'{chosen_ckpt}',
-        '--adata', f'{LOCAL_DATA_DIR}/competition_val_template.h5ad',
-        '--pert-col', 'target_gene'
-    ]
-    subprocess.run(infer_cmd, check=False)
+infer_cmd = STATE_CMD + [
+    'tx', 'infer',
+    '--output', f'{OUTPUT_DIR}/prediction.h5ad',
+    '--model-dir', f'{OUTPUT_DIR}/{RUN_NAME}',
+    '--checkpoint', f'{OUTPUT_DIR}/{RUN_NAME}/checkpoints/step=40000.ckpt',
+    '--adata', f'{LOCAL_DATA_DIR}/competition_val_template.h5ad',
+    '--pert-col', 'target_gene'
+]
+subprocess.run(infer_cmd, check=False)
 
 """### Use Different Checkpoint
 

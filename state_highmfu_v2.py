@@ -749,13 +749,43 @@ import os
 # os.environ['WANDB_MODE'] = 'offline'
 print("✅ WandB online mode - 实时监控训练进度")
 
-# Get WandB entity from environment variable (optional)
-# If not set, WandB will automatically use the logged-in user's default entity
+# Get WandB entity from environment variable or auto-detect logged-in user
 wandb_entity = os.environ.get('WANDB_ENTITY')
+
+# Try to auto-detect WandB entity if not set
+if not wandb_entity:
+    try:
+        import wandb
+        try:
+            api = wandb.Api()
+            # viewer is a property, not a method - access it directly
+            viewer = api.viewer
+            if hasattr(viewer, 'username'):
+                detected_entity = viewer.username
+            elif hasattr(viewer, '__dict__'):
+                detected_entity = viewer.__dict__.get('username') or viewer.__dict__.get('entity')
+            else:
+                # Try calling as method (some versions)
+                try:
+                    viewer_info = api.viewer()
+                    detected_entity = viewer_info.get('username') if isinstance(viewer_info, dict) else getattr(viewer_info, 'username', None)
+                except:
+                    detected_entity = None
+            
+            if detected_entity:
+                wandb_entity = detected_entity
+                print(f"✅ Auto-detected WandB entity: {wandb_entity}")
+        except Exception as e:
+            print(f"⚠️  Could not auto-detect WandB entity: {e}")
+            print("   Will use default entity (logged-in user)")
+    except ImportError:
+        pass
+
 if wandb_entity:
-    print(f"✅ Using WandB entity from environment: {wandb_entity}")
+    print(f"✅ WandB entity: {wandb_entity}")
 else:
-    print("✅ WandB entity not set - will use logged-in user's default entity")
+    print("⚠️  WandB entity not set - will use default entity")
+    print("   To set explicitly, use: export WANDB_ENTITY=your_username")
 
 # Get WandB project (can also be set via environment variable)
 wandb_project = os.environ.get('WANDB_PROJECT', 'vcc')
@@ -829,8 +859,9 @@ if RESUME_TRAINING:
     if ckpts:
         latest_ckpt = max(ckpts, key=os.path.getmtime)
         print(f"🔄 Resuming from: {os.path.basename(latest_ckpt)}")
-        # Quote the checkpoint path because it contains '=' (Hydra override requires quoting)
-        train_cmd_parts.append(f'training.resume_from_checkpoint="{latest_ckpt}"')
+        # Use + prefix to add new config key, and quote path because it contains '='
+        # Hydra requires + prefix for adding keys that don't exist in the config struct
+        train_cmd_parts.append(f'+training.resume_from_checkpoint="{latest_ckpt}"')
 
 print("="*80)
 print("🚀 HIGH MFU TRAINING CONFIGURATION")

@@ -159,11 +159,18 @@ if torch.cuda.is_available():
             print(f"\n⚙️  Using all {use_num_gpus} GPU(s) (default)")
     
     num_gpus = use_num_gpus
+    # Enable cuDNN benchmark for faster convolutions on fixed input sizes
+    try:
+        import torch.backends.cudnn as cudnn
+        cudnn.benchmark = True
+        print("✅ cuDNN benchmark enabled")
+    except Exception:
+        pass
 
     # Optimize: High GPU, Low System RAM
     # RTX 5090 has 32GB, treat similar to A100 but with RTX optimizations
     if gpu_memory >= 30:  # RTX 5090, A100, etc.
-        num_workers = 24  # HIGH MFU: 128核CPU，进一步提升并行数据加载
+        num_workers = 32  # HIGH MFU: 128核CPU，进一步提升并行数据加载
         cell_set_length = 4096
         model_size = "state_lg"  # Use large model for high-end GPUs
         # Smart batch size selection based on GPU memory
@@ -179,7 +186,7 @@ if torch.cuda.is_available():
             # Auto-select based on GPU memory: 32GB -> 96, can use up to 128
             # Conservative: 64, Standard: 80, Aggressive: 96
             if gpu_memory >= 32:
-                batch_size = 96  # Aggressive: 充分利用32GB显存
+                batch_size = 128  # 更激进: 充分利用32GB显存
             else:
                 batch_size = 80  # Standard for 30-32GB
         if "RTX 5090" in gpu_name or "5090" in gpu_name:
@@ -590,7 +597,7 @@ gc.collect()
 os.environ['PYTORCH_ALLOC_CONF'] = 'max_split_size_mb:512,expandable_segments:True'
 
 # Reduce dataloader prefetch to save memory
-os.environ['PREFETCH_FACTOR'] = '2'
+os.environ['PREFETCH_FACTOR'] = '16'
 
 # If still high memory, reduce workers here:
 # num_workers = 4  # Uncomment if memory is still too high
@@ -865,7 +872,7 @@ train_cmd_parts = STATE_CMD + [
     'data.kwargs.control_pert=non-targeting',
     f'data.kwargs.perturbation_features_file={pert_features_file}',
     '++data.kwargs.persistent_workers=True',
-    '++data.kwargs.prefetch_factor=12',
+    '++data.kwargs.prefetch_factor=16',
     '++data.kwargs.pin_memory=True',
 ]
 
@@ -892,6 +899,7 @@ train_cmd_parts.extend([
     'training.ckpt_every_n_steps=5000',
     '++training.val_check_interval=2000',
     '++training.limit_val_batches=1.0',
+    '++training.num_sanity_val_steps=0',
     f'++training.gradient_accumulation_steps={gradient_accumulation_steps}',
     f'model={model_size}',
     '++training.precision=16-mixed',
@@ -911,8 +919,8 @@ if wandb_entity:
 if num_gpus > 1:
     train_cmd_parts.append('++training.accelerator=gpu')
     train_cmd_parts.append(f'++training.devices={num_gpus}')
-    # Use ddp_find_unused_parameters_true to handle unused parameters in STATE model
-    train_cmd_parts.append('++training.strategy=ddp_find_unused_parameters_true')
+    # Prefer ddp for lower overhead; if unused params error occurs, switch back to ddp_find_unused_parameters_true
+    train_cmd_parts.append('++training.strategy=ddp')
     print(f"✅ Multi-GPU training enabled: {num_gpus} GPUs with DDP strategy (find_unused_parameters=True)")
 elif num_gpus == 1:
     train_cmd_parts.append('++training.accelerator=gpu')
@@ -933,7 +941,7 @@ print("="*80)
 print("🚀 HIGH MFU TRAINING CONFIGURATION")
 print("="*80)
 print(f"✅ HDF5 Cache: 256MB (vs 1MB baseline)")
-print(f"✅ Workers: {num_workers} + persistent + prefetch=4")
+print(f"✅ Workers: {num_workers} + persistent + prefetch=16")
 print(f"✅ Grad Accumulation: {gradient_accumulation_steps}x (有效batch x{gradient_accumulation_steps})")
 if num_gpus > 1:
     print(f"✅ Multi-GPU: {num_gpus} GPUs (总有效batch x{num_gpus * gradient_accumulation_steps})")
@@ -971,9 +979,82 @@ except ImportError:
 
 print(f"Training command:\n{' '.join(train_cmd_parts)}\n")
 
-# Execute training command
+# Execute training command with automatic OOM retry
 # Note: python -m state should work from any directory if STATE is properly installed
-subprocess.run(train_cmd_parts, check=False)
+def run_training_with_oom_fallback():
+    """Run training with automatic batch size reduction on OOM"""
+    # Define fallback configurations (batch_size, gradient_accumulation)
+    fallback_configs = [
+        (128, 1),  # Aggressive (current)
+        (96, 1),   # Moderate
+        (80, 2),   # Conservative with more GA
+        (64, 2),   # Safe
+        (48, 4),   # Very safe
+    ]
+    
+    # Get current batch size from train_cmd_parts
+    current_batch_idx = None
+    for i, part in enumerate(train_cmd_parts):
+        if 'batch_size=' in part:
+            current_batch_idx = i
+            break
+    
+    # Try each configuration
+    for attempt, (batch_sz, grad_accum) in enumerate(fallback_configs, 1):
+        print(f"\n{'='*80}")
+        print(f"🔄 Training Attempt {attempt}/{len(fallback_configs)}")
+        print(f"   Batch size: {batch_sz}, Gradient accumulation: {grad_accum}")
+        print(f"{'='*80}\n")
+        
+        # Update batch size in command
+        if current_batch_idx is not None:
+            train_cmd_parts[current_batch_idx] = f'++data.kwargs.batch_size={batch_sz}'
+        else:
+            # Add batch size if not present
+            train_cmd_parts.insert(-8, f'++data.kwargs.batch_size={batch_sz}')
+            current_batch_idx = len(train_cmd_parts) - 9
+        
+        # Update gradient accumulation
+        for i, part in enumerate(train_cmd_parts):
+            if 'gradient_accumulation_steps=' in part:
+                train_cmd_parts[i] = f'++training.gradient_accumulation_steps={grad_accum}'
+                break
+        
+        # Run training
+        result = subprocess.run(train_cmd_parts, capture_output=False, text=True)
+        
+        # Check exit code
+        if result.returncode == 0:
+            print(f"\n✅ Training completed successfully with batch_size={batch_sz}, GA={grad_accum}")
+            return True
+        else:
+            # Check if it's an OOM error (exit code varies, so try next config)
+            print(f"\n⚠️  Training failed (exit code: {result.returncode})")
+            
+            if attempt < len(fallback_configs):
+                print(f"💡 Trying smaller batch size / larger gradient accumulation...")
+                import time
+                time.sleep(5)  # Brief pause before retry
+            else:
+                print(f"\n❌ All fallback configurations failed")
+                print(f"   Last attempt: batch_size={batch_sz}, GA={grad_accum}")
+                print(f"\n💡 Suggestions:")
+                print(f"   1. Reduce num_workers: export NUM_WORKERS=24 (or 16)")
+                print(f"   2. Use smaller model: Try state_sm instead of state_lg")
+                print(f"   3. Manually set batch: export BATCH_SIZE=32")
+                return False
+    
+    return False
+
+# Run with fallback
+success = run_training_with_oom_fallback()
+
+if not success:
+    print("\n" + "="*80)
+    print("⚠️  Training did not complete successfully")
+    print("="*80)
+    import sys
+    sys.exit(1)
 
 """### 🎯 Validation and Metrics Configuration
 

@@ -810,8 +810,8 @@ if wandb_entity:
 if num_gpus > 1:
     train_cmd_parts.append('++training.accelerator=gpu')
     train_cmd_parts.append(f'++training.devices={num_gpus}')
-    # Prefer ddp for lower overhead; fallback to ddp_find_unused_parameters_true on error
-    train_cmd_parts.append('++training.strategy=ddp')
+    # STATE model has unused parameters, must use ddp_find_unused_parameters_true
+    train_cmd_parts.append('++training.strategy=ddp_find_unused_parameters_true')
     print(f"✅ Multi-GPU training enabled: {num_gpus} GPUs with DDP strategy (find_unused_parameters=True)")
 elif num_gpus == 1:
     train_cmd_parts.append('++training.accelerator=gpu')

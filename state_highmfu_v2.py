@@ -850,7 +850,8 @@ if num_gpus > 1:
     # With strong CPU and NVMe, prefer larger per-step batch; set GA to 1
     gradient_accumulation_steps = 1
     print(f"💡 Multi-GPU detected: Reducing gradient accumulation to {gradient_accumulation_steps}x")
-    print(f"   (Effective batch size: {num_gpus} GPUs × {gradient_accumulation_steps} = {num_gpus * gradient_accumulation_steps}x)")
+    effective_batch = num_gpus * gradient_accumulation_steps
+    print(f"   Effective batch size: {num_gpus} GPUs × {gradient_accumulation_steps} = {effective_batch}x")
 else:
     gradient_accumulation_steps = 8
 
@@ -878,7 +879,8 @@ if 'batch_size' in locals() and batch_size is not None:
     if 'gpu_memory' in locals() and gpu_memory:
         if estimated_memory_gb > gpu_memory * 0.9:
             print(f"   ⚠️  Warning: Estimated memory ({estimated_memory_gb:.1f}GB) may exceed GPU capacity ({gpu_memory:.1f}GB)")
-            print(f"   💡 If OOM occurs, reduce batch size: export BATCH_SIZE={batch_size // 2}")
+            reduced_batch = batch_size // 2
+            print(f"   💡 If OOM occurs, reduce batch size: export BATCH_SIZE={reduced_batch}")
         else:
             print(f"   ✅ Estimated memory ({estimated_memory_gb:.1f}GB) is safe for GPU ({gpu_memory:.1f}GB)")
 else:
@@ -899,7 +901,7 @@ train_cmd_parts.extend([
     '+wandb.log_model=true',
     f'output_dir={OUTPUT_DIR}',
     f'name={RUN_NAME}'
-]
+])
 
 # Add WandB entity if specified (optional - WandB will use logged-in user if not set)
 if wandb_entity:

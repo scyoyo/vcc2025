@@ -562,8 +562,8 @@ gc.collect()
 # Set PyTorch to use less system memory
 os.environ['PYTORCH_ALLOC_CONF'] = 'max_split_size_mb:512,expandable_segments:True'
 
-    # Increase dataloader prefetch to feed GPUs better
-    os.environ['PREFETCH_FACTOR'] = '16'
+# Increase dataloader prefetch to feed GPUs better
+os.environ['PREFETCH_FACTOR'] = '16'
 
 # If still high memory, reduce workers here:
 # num_workers = 4  # Uncomment if memory is still too high
